@@ -115,45 +115,74 @@ export const Customers: React.FC = () => {
             <Loader2 className="animate-spin text-blue-600" size={32} />
           </div>
         ) : (
-          <table className="w-full text-left border-collapse">
-            <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-semibold">
-              <tr>
-                <th className="px-6 py-4">Tên</th>
-                <th className="px-6 py-4">Số Điện Thoại</th>
-                <th className="px-6 py-4">Chú Thích</th>
-                <th className="px-6 py-4">Ngày Tạo</th>
-                <th className="px-6 py-4 text-right">Thao Tác</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
+          <>
+            <div className="hidden sm:block">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-semibold">
+                  <tr>
+                    <th className="px-6 py-4">Tên</th>
+                    <th className="px-6 py-4">Số Điện Thoại</th>
+                    <th className="px-6 py-4">Chú Thích</th>
+                    <th className="px-6 py-4">Ngày Tạo</th>
+                    <th className="px-6 py-4 text-right">Thao Tác</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filtered.map(c => (
+                    <tr key={c.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 font-medium text-gray-800">{c.name}</td>
+                      <td className="px-6 py-4 text-gray-700">{c.phone}</td>
+                      <td className="px-6 py-4 text-gray-600 text-sm">{c.note || '—'}</td>
+                      <td className="px-6 py-4 text-gray-500 text-sm">{new Date(c.createdAt).toLocaleDateString('vi-VN')}</td>
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button onClick={() => setDetailCustomer(c)} className="p-1.5 text-gray-700 hover:bg-gray-50 rounded-md" title={c.note ? `Chú thích: ${c.note}` : 'Xem chi tiết'}>
+                            <Eye size={16} />
+                          </button>
+                          <button onClick={() => openEdit(c)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md">
+                            <Edit2 size={16} />
+                          </button>
+                          <button onClick={() => remove(c.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-md">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-12 text-center text-gray-400">Không có khách hàng.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="sm:hidden p-2 space-y-2">
               {filtered.map(c => (
-                <tr key={c.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 font-medium text-gray-800">{c.name}</td>
-                  <td className="px-6 py-4 text-gray-700">{c.phone}</td>
-                  <td className="px-6 py-4 text-gray-600 text-sm">{c.note || '—'}</td>
-                  <td className="px-6 py-4 text-gray-500 text-sm">{new Date(c.createdAt).toLocaleDateString('vi-VN')}</td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => setDetailCustomer(c)} className="p-1.5 text-gray-700 hover:bg-gray-50 rounded-md" title={c.note ? `Chú thích: ${c.note}` : 'Xem chi tiết'}>
-                        <Eye size={16} />
-                      </button>
-                      <button onClick={() => openEdit(c)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md">
-                        <Edit2 size={16} />
-                      </button>
-                      <button onClick={() => remove(c.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-md">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+                <div key={c.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-lg p-4">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-gray-800 truncate">{c.name}</p>
+                    <p className="text-sm text-gray-600">{c.phone}</p>
+                    <p className="text-xs text-gray-400">{new Date(c.createdAt).toLocaleDateString('vi-VN')}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setDetailCustomer(c)} className="px-3 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg">
+                      <Eye size={18} />
+                    </button>
+                    <button onClick={() => openEdit(c)} className="px-3 py-2 text-blue-700 bg-blue-100 hover:bg-blue-200 rounded-lg">
+                      <Edit2 size={18} />
+                    </button>
+                    <button onClick={() => remove(c.id)} className="px-3 py-2 text-red-700 bg-red-100 hover:bg-red-200 rounded-lg">
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                </div>
               ))}
               {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-400">Không có khách hàng.</td>
-                </tr>
+                <p className="text-center text-gray-400 py-8">Không có khách hàng.</p>
               )}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
       </div>
 
