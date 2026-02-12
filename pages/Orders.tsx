@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { MockBackend } from '../services/mockBackend';
 import { Order, OrderStatus, Product, CartItem, Customer } from '../types';
-import { Search, Plus, Eye, CheckCircle, Truck, XCircle, Clock, Loader2, Edit2 } from 'lucide-react';
+import { Search, Plus, Eye, CheckCircle, Truck, XCircle, Clock, Loader2, Edit2, Trash2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 
 export const Orders: React.FC = () => {
@@ -60,7 +60,7 @@ export const Orders: React.FC = () => {
   const today = new Date().toDateString();
   const todayOrders = orders.filter(o => new Date(o.createdAt).toDateString() === today);
   const todayCount = todayOrders.length;
-  const todayRevenue = todayOrders.reduce((sum, o) => sum + o.totalAmount, 0);
+  const todayRevenue = todayOrders.filter(o => o.status !== OrderStatus.CANCELLED).reduce((sum, o) => sum + o.totalAmount, 0);
   const pendingCount = orders.filter(o => o.status === OrderStatus.PENDING).length;
   const completedCount = orders.filter(o => o.status === OrderStatus.COMPLETED).length;
 
@@ -87,6 +87,14 @@ export const Orders: React.FC = () => {
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus, cancelReason: reason || o.cancelReason } : o));
     await MockBackend.updateOrderStatus(orderId, newStatus, reason);
     await loadData();
+  };
+  
+  const handleDeleteOrder = async (orderId: string) => {
+    if (confirm('Bạn có chắc muốn xóa đơn này? Tồn kho sẽ được khôi phục.')) {
+      await MockBackend.deleteOrder(orderId);
+      setOrders(prev => prev.filter(o => o.id !== orderId));
+      await loadData();
+    }
   };
 
   // --- Cart Logic ---
@@ -247,6 +255,13 @@ export const Orders: React.FC = () => {
                         onClick={() => { setDetailOrder(order); setIsDetailOpen(true); }}
                       >
                         <Eye size={16} />
+                      </button>
+                      <button
+                        className="p-1.5 text-red-600 hover:bg-red-50 rounded-md mr-2"
+                        title="Xóa đơn hàng"
+                        onClick={() => handleDeleteOrder(order.id)}
+                      >
+                        <Trash2 size={16} />
                       </button>
                       <button
                         className="p-1.5 text-gray-700 hover:bg-gray-50 rounded-md mr-2"

@@ -358,16 +358,33 @@ export const MockBackend = {
   },
 
   updateOrderStatus: async (orderId: string, status: OrderStatus, cancelReason?: string) => {
-    if (MockBackend.isOnlineMode()) {
-      try {
-        const payload: any = { status };
-        if (status === OrderStatus.CANCELLED && cancelReason) payload.cancelReason = cancelReason;
-        await withTimeout(update(ref(db, `orders/${orderId}`), payload));
-      } catch (e) { 
-        throw e; 
-      }
-    } else {
+    if (!MockBackend.isOnlineMode()) {
       throw new Error('Chỉ hỗ trợ online');
+    }
+    try {
+      const orderSnap = await withTimeout(get(ref(db, `orders/${orderId}`)));
+      if (!orderSnap || !(orderSnap as any).exists || !(orderSnap as any).exists()) {
+        throw new Error('Đơn hàng không tồn tại');
+      }
+      const currentOrder = (orderSnap as any).val() as Order;
+      const payload: any = { status };
+      if (status === OrderStatus.CANCELLED && cancelReason) payload.cancelReason = cancelReason;
+      const updates: any = {};
+      updates[`orders/${orderId}`] = { ...currentOrder, ...payload };
+      
+      if (status === OrderStatus.CANCELLED && currentOrder.status !== OrderStatus.CANCELLED) {
+        const products = await MockBackend.getProducts();
+        currentOrder.items.forEach(item => {
+          const product = products.find(p => p.id === item.productId);
+          if (product) {
+            updates[`products/${product.id}/stock`] = product.stock + item.quantity;
+          }
+        });
+      }
+      
+      await withTimeout(update(ref(db), updates));
+    } catch (e) {
+      throw e;
     }
   },
   
@@ -380,6 +397,31 @@ export const MockBackend = {
       }
     } else {
       throw new Error('Chỉ hỗ trợ online');
+    }
+  },
+  
+  deleteOrder: async (orderId: string) => {
+    if (!MockBackend.isOnlineMode()) {
+      throw new Error('Chỉ hỗ trợ online');
+    }
+    try {
+      const orderSnap = await withTimeout(get(ref(db, `orders/${orderId}`)));
+      if (!orderSnap || !(orderSnap as any).exists || !(orderSnap as any).exists()) {
+        return;
+      }
+      const order = (orderSnap as any).val() as Order;
+      const products = await MockBackend.getProducts();
+      const updates: any = {};
+      updates[`orders/${orderId}`] = null;
+      order.items.forEach(item => {
+        const product = products.find(p => p.id === item.productId);
+        if (product) {
+          updates[`products/${product.id}/stock`] = product.stock + item.quantity;
+        }
+      });
+      await withTimeout(update(ref(db), updates));
+    } catch (e) {
+      throw e;
     }
   },
   

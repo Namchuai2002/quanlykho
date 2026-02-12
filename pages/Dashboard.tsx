@@ -31,11 +31,12 @@ export const Dashboard: React.FC = () => {
     fetchData();
   }, []);
 
-  const totalRevenue = orders.reduce((sum, order) => sum + order.totalAmount, 0);
+  const totalRevenue = orders.filter(o => o.status !== OrderStatus.CANCELLED).reduce((sum, order) => sum + order.totalAmount, 0);
   const totalOrders = orders.length;
   const lowStockProducts = products.filter(p => p.stock < 10);
   const todayStr = new Date().toLocaleDateString('vi-VN');
-  const revenueToday = orders.filter(o => new Date(o.createdAt).toLocaleDateString('vi-VN') === todayStr)
+  const revenueToday = orders
+    .filter(o => new Date(o.createdAt).toLocaleDateString('vi-VN') === todayStr && o.status !== OrderStatus.CANCELLED)
     .reduce((sum, o) => sum + o.totalAmount, 0);
   const completedCount = orders.filter(o => o.status === OrderStatus.COMPLETED).length;
   const completionRate = totalOrders > 0 ? Math.round((completedCount * 100) / totalOrders) : 0;
@@ -60,7 +61,7 @@ export const Dashboard: React.FC = () => {
   };
 
   // Prepare chart data (Revenue by Day)
-  const chartData = orders.reduce((acc: any[], order) => {
+  const chartData = orders.filter(o => o.status !== OrderStatus.CANCELLED).reduce((acc: any[], order) => {
     const date = new Date(order.createdAt).toLocaleDateString('vi-VN');
     const existing = acc.find(item => item.date === date);
     if (existing) {
