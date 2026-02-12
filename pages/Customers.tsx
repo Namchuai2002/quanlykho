@@ -24,6 +24,7 @@ export const Customers: React.FC = () => {
     setOrders(ords);
     setLoading(false);
   };
+//lỗi ghê ta ơi
 
   useEffect(() => { loadData(); }, []);
 
