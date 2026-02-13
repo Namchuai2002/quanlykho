@@ -9,6 +9,7 @@ import { Customers } from './pages/Customers';
 import { Login } from './pages/Login';
 import { User } from './types';
 import { MockBackend } from './services/mockBackend';
+import { ChatWidget } from './components/ChatWidget';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -94,6 +95,7 @@ const App: React.FC = () => {
             {renderPage()}
           </div>
         </main>
+        <ChatWidget />
       </div>
     </div>
   );

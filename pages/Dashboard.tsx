@@ -95,7 +95,7 @@ export const Dashboard: React.FC = () => {
 
       {aiInsight && (
         <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-6 relative">
-           <div className="absolute top-0 left-0 bg-indigo-600 text-white text-xs px-2 py-1 rounded-br-lg rounded-tl-lg font-bold">GEMINI AI</div>
+           <div className="absolute top-0 left-0 bg-indigo-600 text-white text-xs px-2 py-1 rounded-br-lg rounded-tl-lg font-bold">GỢI Ý</div>
            <p className="text-indigo-900 mt-2 leading-relaxed whitespace-pre-line">{aiInsight}</p>
         </div>
       )}
