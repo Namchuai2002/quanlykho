@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { MockBackend } from '../services/mockBackend';
 import { Download, Upload, Save, Database, Loader2 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 export const Settings: React.FC = () => {
   const jsonInputRef = useRef<HTMLInputElement>(null);
@@ -19,6 +20,71 @@ export const Settings: React.FC = () => {
     linkElement.setAttribute('download', exportFileDefaultName);
     linkElement.click();
     setLoading(false);
+  };
+  
+  const handleExportExcel = async () => {
+    setLoading(true);
+    try {
+      const [products, orders, customers, categories, imports, exports, payments] = await Promise.all([
+        MockBackend.getProducts(),
+        MockBackend.getOrders(),
+        MockBackend.getCustomers(),
+        MockBackend.getCategories(),
+        MockBackend.getImports(),
+        MockBackend.getExports(),
+        MockBackend.getPayments?.() || Promise.resolve([] as any)
+      ]);
+      
+      const wb = XLSX.utils.book_new();
+      
+      const productsSheet = XLSX.utils.json_to_sheet(products.map(p => ({
+        ID: p.id, Tên: p.name, SKU: p.sku, Giá: p.price, Tồn: p.stock, DanhMục: p.category, NgàyNhập: p.importDate
+      })));
+      XLSX.utils.book_append_sheet(wb, productsSheet, 'Sản phẩm');
+      
+      const ordersSheet = XLSX.utils.json_to_sheet(orders.map(o => ({
+        MãĐơn: o.id, Khách: o.customerName, SĐT: o.customerPhone, ĐịaChỉ: o.address, Tổng: o.totalAmount,
+        TrạngThái: o.status, NgàyTạo: o.createdAt, ĐãTrả: o.paidAmount || 0, HạnTT: o.dueDate || '', GhiChú: o.note || ''
+      })));
+      XLSX.utils.book_append_sheet(wb, ordersSheet, 'Đơn hàng');
+      
+      const orderItems = orders.flatMap(o => o.items.map(it => ({
+        MãĐơn: o.id, SP_ID: it.productId, TênSP: it.name, ĐơnGiá: it.price, SL: it.quantity
+      })));
+      const itemsSheet = XLSX.utils.json_to_sheet(orderItems);
+      XLSX.utils.book_append_sheet(wb, itemsSheet, 'Chi tiết đơn');
+      
+      const customersSheet = XLSX.utils.json_to_sheet(customers.map(c => ({
+        ID: c.id, Tên: c.name, SĐT: c.phone, ĐịaChỉ: c.address, NgàyTạo: c.createdAt, GhiChú: c.note || ''
+      })));
+      XLSX.utils.book_append_sheet(wb, customersSheet, 'Khách hàng');
+      
+      const categoriesSheet = XLSX.utils.json_to_sheet(categories.map(c => ({ ID: c.id, Tên: c.name })));
+      XLSX.utils.book_append_sheet(wb, categoriesSheet, 'Danh mục');
+      
+      const importsSheet = XLSX.utils.json_to_sheet(imports.map(im => ({
+        MãNhập: im.id, SP_ID: im.productId, TênSP: im.name, SKU: im.sku, SL: im.quantity, GiáNhập: im.unitCost || 0,
+        TổngGiá: im.totalCost || 0, Ngày: im.createdAt, NCC: im.supplierName || '', GhiChú: im.note || ''
+      })));
+      XLSX.utils.book_append_sheet(wb, importsSheet, 'Nhập kho');
+      
+      const exportsSheet = XLSX.utils.json_to_sheet(exports.map(ex => ({
+        MãXuất: ex.id, SP_ID: ex.productId, TênSP: ex.name, SKU: ex.sku, SL: ex.quantity, Ngày: ex.createdAt,
+        MãĐơn: ex.orderId, Khách: ex.customerName, SĐT: ex.customerPhone
+      })));
+      XLSX.utils.book_append_sheet(wb, exportsSheet, 'Xuất kho');
+      
+      const paymentsSheet = XLSX.utils.json_to_sheet((payments || []).map((p: any) => ({
+        MãGD: p.id, Loại: p.kind, MãĐơn: p.orderId || '', MãNhập: p.importId || '', SốTiền: p.amount, PhươngThức: p.method,
+        Ngày: p.createdAt, GhiChú: p.note || '', Khách: p.customerName || '', NCC: p.supplierName || ''
+      })));
+      XLSX.utils.book_append_sheet(wb, paymentsSheet, 'Thanh toán');
+      
+      const filename = `bao_cao_quanlykho_${new Date().toLocaleDateString('vi-VN').replace(/\//g, '-')}.xlsx`;
+      XLSX.writeFile(wb, filename);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // --- IMPORT JSON ---
@@ -81,6 +147,14 @@ export const Settings: React.FC = () => {
             >
               <Download size={18} />
               <span>Tải Xuống Backup (.json)</span>
+            </button>
+            <button 
+              onClick={handleExportExcel}
+              disabled={loading}
+              className="w-full flex items-center justify-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg transition-colors font-medium"
+            >
+              {loading ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
+              <span>Xuất Báo Cáo Excel (.xlsx)</span>
             </button>
 
             <input 

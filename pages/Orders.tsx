@@ -64,6 +64,19 @@ export const Orders: React.FC = () => {
   const pendingCount = orders.filter(o => o.status === OrderStatus.PENDING).length;
   const completedCount = orders.filter(o => o.status === OrderStatus.COMPLETED).length;
 
+  const reservedMap = (() => {
+    const map = new Map<string, number>();
+    orders
+      .filter(o => o.status !== OrderStatus.CANCELLED && o.status !== OrderStatus.COMPLETED)
+      .forEach(o => {
+        o.items.forEach(it => {
+          const cur = map.get(it.productId) || 0;
+          map.set(it.productId, cur + it.quantity);
+        });
+      });
+    return map;
+  })();
+  const reservedTotal = Array.from(reservedMap.values()).reduce((a,b)=>a+b,0);
   const getStatusBadge = (status: OrderStatus) => {
     switch (status) {
       case OrderStatus.COMPLETED:
@@ -215,6 +228,10 @@ export const Orders: React.FC = () => {
           <div className="bg-green-50 border border-green-100 rounded-lg p-3">
             <p className="text-xs text-gray-600">Đơn hoàn thành</p>
             <p className="text-lg font-bold text-green-700">{completedCount}</p>
+          </div>
+          <div className="bg-amber-50 border border-amber-100 rounded-lg p-3">
+            <p className="text-xs text-gray-600">Sắp xuất (đơn chưa hoàn thành)</p>
+            <p className="text-lg font-bold text-amber-700">{reservedTotal}</p>
           </div>
         </div>
 
@@ -423,9 +440,14 @@ export const Orders: React.FC = () => {
                 onChange={(e) => setSelectedProductId(e.target.value)}
               >
                 <option value="">-- Chọn sản phẩm --</option>
-                {products.filter(p => p.stock > 0).map(p => (
-                  <option key={p.id} value={p.id}>{p.name} - {p.price.toLocaleString()}đ (Còn: {p.stock})</option>
-                ))}
+                {products.filter(p => p.stock > 0).map(p => {
+                  const rv = reservedMap.get(p.id) || 0;
+                  return (
+                    <option key={p.id} value={p.id}>
+                      {p.name} - {p.price.toLocaleString()}đ (Còn: {p.stock} • Sắp xuất: {rv})
+                    </option>
+                  );
+                })}
               </select>
               <input 
                 type="number"

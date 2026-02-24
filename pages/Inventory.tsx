@@ -76,6 +76,15 @@ export const Inventory: React.FC = () => {
     loadData();
   }, []);
   useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const oData = await MockBackend.getOrders();
+        setOrders(oData);
+      } catch {}
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
     setPage(1);
   }, [searchTerm, filterCategory, filterStock, products]);
 
