@@ -65,7 +65,7 @@ export const Dashboard: React.FC = () => {
   };
 
   // Prepare chart data (Revenue by Day)
-  const chartData = orders.filter(o => o.status !== OrderStatus.CANCELLED && (o.paidAmount || 0) >= o.totalAmount).reduce((acc: any[], order) => {
+  const chartData = orders.filter(o => o.status !== OrderStatus.CANCELLED).reduce((acc: any[], order) => {
     const date = new Date(order.createdAt).toLocaleDateString('vi-VN');
     const existing = acc.find(item => item.date === date);
     if (existing) {
@@ -259,24 +259,28 @@ export const Dashboard: React.FC = () => {
             Biểu Đồ 7 Ngày
           </h3>
           <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} tickFormatter={(value) => `${value/1000}k`} />
-                <Tooltip 
-                  formatter={(value: number) => [`${value.toLocaleString()} ₫`, 'Doanh thu']}
-                  contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
-                />
-                <Area type="monotone" dataKey="revenue" stroke="#3b82f6" fillOpacity={1} fill="url(#colorRevenue)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
+            {chartData.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-gray-400 text-sm">Không có dữ liệu</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} tickFormatter={(value) => `${Math.round(value/1000)}k`} />
+                  <Tooltip 
+                    formatter={(value: number) => [`${value.toLocaleString()} ₫`, 'Doanh thu']}
+                    contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
+                  />
+                  <Area type="monotone" dataKey="revenue" stroke="#3b82f6" fillOpacity={1} fill="url(#colorRevenue)" strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
