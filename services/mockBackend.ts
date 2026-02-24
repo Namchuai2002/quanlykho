@@ -1,4 +1,4 @@
-import { Product, Order, OrderStatus, User, Category, Customer } from '../types';
+import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ExportRecord, PaymentRecord } from '../types';
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, get, set, child, update, push } from 'firebase/database';
 
@@ -75,6 +75,9 @@ const STORAGE_KEYS = {
   ORDERS: 'app_orders',
   CUSTOMERS: 'app_customers',
   USER: 'app_user',
+  IMPORTS: 'app_imports',
+  EXPORTS: 'app_exports',
+  PAYMENTS: 'app_payments',
 };
 
 // --- HELPER FUNCTIONS ---
@@ -222,14 +225,242 @@ export const MockBackend = {
   getProducts: async (): Promise<Product[]> => {
     if (MockBackend.isOnlineMode()) {
       try {
-        return await readPath<Product>('products', 12000);
+        const online = await readPath<Product>('products', 12000);
+        if (online && online.length > 0) return online;
+        const local = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+        return local ? JSON.parse(local) : [];
       } catch (e) { 
-        return [];
+        const local = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+        return local ? JSON.parse(local) : [];
       }
     } else {
       const data = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
       return data ? JSON.parse(data) : [];
     }
+  },
+
+  // --- IMPORTS (STOCK IN) ---
+  getImports: async (): Promise<ImportRecord[]> => {
+    if (MockBackend.isOnlineMode()) {
+      try {
+        const list = await readPath<ImportRecord>('imports', 12000) as any[];
+        if (!list || list.length === 0) {
+          const local = localStorage.getItem(STORAGE_KEYS.IMPORTS);
+          const l = local ? JSON.parse(local) : [];
+          return l.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        }
+        return list.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      } catch (e) {
+        const local = localStorage.getItem(STORAGE_KEYS.IMPORTS);
+        const l = local ? JSON.parse(local) : [];
+        return l.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      }
+    } else {
+      const data = localStorage.getItem(STORAGE_KEYS.IMPORTS);
+      const list = data ? JSON.parse(data) : [];
+      return list.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
+  },
+
+  getExports: async (): Promise<ExportRecord[]> => {
+    if (MockBackend.isOnlineMode()) {
+      try {
+        const list = await readPath<ExportRecord>('exports', 12000) as any[];
+        if (!list || list.length === 0) {
+          const local = localStorage.getItem(STORAGE_KEYS.EXPORTS);
+          const l = local ? JSON.parse(local) : [];
+          return l.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        }
+        return list.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      } catch (e) {
+        const local = localStorage.getItem(STORAGE_KEYS.EXPORTS);
+        const l = local ? JSON.parse(local) : [];
+        return l.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      }
+    } else {
+      const data = localStorage.getItem(STORAGE_KEYS.EXPORTS);
+      const list = data ? JSON.parse(data) : [];
+      return list.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
+  },
+  
+  getPayments: async (): Promise<PaymentRecord[]> => {
+    if (MockBackend.isOnlineMode()) {
+      try {
+        const list = await readPath<PaymentRecord>('payments', 12000) as any[];
+        if (!list || list.length === 0) {
+          const local = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
+          const l = local ? JSON.parse(local) : [];
+          return l.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        }
+        return list.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      } catch (e) {
+        const local = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
+        const l = local ? JSON.parse(local) : [];
+        return l.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      }
+    } else {
+      const data = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
+      const list = data ? JSON.parse(data) : [];
+      return list.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
+  },
+
+  importStock: async (productId: string, quantity: number, unitCost?: number, note?: string, supplierName?: string, paidNow?: boolean): Promise<ImportRecord> => {
+    if (quantity <= 0) throw new Error('Số lượng nhập phải > 0');
+    const products = await MockBackend.getProducts();
+    const product = products.find(p => p.id === productId);
+    if (!product) throw new Error('Sản phẩm không tồn tại');
+    const id = `IMP${Date.now().toString().slice(-8)}`;
+    const record: ImportRecord = {
+      id,
+      productId,
+      sku: product.sku,
+      name: product.name,
+      quantity,
+      unitCost,
+      totalCost: unitCost ? unitCost * quantity : undefined,
+      createdAt: new Date().toISOString(),
+      note,
+      supplierName: supplierName || note
+    };
+
+    const offlineWrite = async () => {
+      const list = await MockBackend.getImports();
+      localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify([record, ...list]));
+      const newProducts = products.map(p => p.id === product.id ? { ...p, stock: (p.stock || 0) + quantity, importDate: new Date().toISOString() } : p);
+      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(newProducts));
+    };
+
+    if (MockBackend.isOnlineMode()) {
+      try {
+        const updates: any = {};
+        updates['imports/' + id] = record;
+        updates['products/' + product.id + '/stock'] = (product.stock || 0) + quantity;
+        updates['products/' + product.id + '/importDate'] = new Date().toISOString();
+        await withTimeout(update(ref(db), updates));
+        if (paidNow && unitCost) {
+          const paymentId = `PAY${Date.now().toString().slice(-8)}`;
+          const pay: PaymentRecord = {
+            id: paymentId,
+            kind: 'payable',
+            importId: id,
+            amount: unitCost * quantity,
+            method: 'bank',
+            createdAt: new Date().toISOString(),
+            note,
+            supplierName: record.supplierName
+          };
+          await withTimeout(set(ref(db, 'payments/' + paymentId), pay));
+        }
+      } catch (e) {
+        try {
+          await offlineWrite();
+        } catch {
+          throw e;
+        }
+      }
+    } else {
+      await offlineWrite();
+      if (paidNow && unitCost) {
+        const payments = await MockBackend.getPayments();
+        const paymentId = `PAY${Date.now().toString().slice(-8)}`;
+        const pay: PaymentRecord = {
+          id: paymentId,
+          kind: 'payable',
+          importId: id,
+          amount: unitCost * quantity,
+          method: 'bank',
+          createdAt: new Date().toISOString(),
+          note,
+          supplierName: record.supplierName
+        };
+        localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([pay, ...payments]));
+      }
+    }
+    return record;
+  },
+  
+  addOrderPayment: async (orderId: string, amount: number, method: PaymentRecord['method'], note?: string): Promise<PaymentRecord> => {
+    const id = `PAY${Date.now().toString().slice(-8)}`;
+    const now = new Date().toISOString();
+    if (MockBackend.isOnlineMode()) {
+      try {
+        const orderSnap = await withTimeout(get(ref(db, `orders/${orderId}`)));
+        if (!orderSnap || !(orderSnap as any).exists || !(orderSnap as any).exists()) {
+          throw new Error('Đơn hàng không tồn tại');
+        }
+        const order = (orderSnap as any).val() as Order;
+        if (order.status !== OrderStatus.COMPLETED) {
+          throw new Error('Đơn hàng chưa hoàn thành, không thể thu tiền');
+        }
+        const paid = (order.paidAmount || 0) + amount;
+        if (paid > order.totalAmount) {
+          throw new Error('Số tiền thu vượt quá tổng đơn');
+        }
+        const payment: PaymentRecord = { id, kind: 'receivable', orderId, amount, method, createdAt: now, note, customerName: order.customerName };
+        const updates: any = {};
+        updates[`orders/${orderId}/paidAmount`] = paid;
+        updates[`payments/${id}`] = payment;
+        await withTimeout(update(ref(db), updates));
+        return payment;
+      } catch (e) {
+        const orders = await MockBackend.getOrders();
+        const order = orders.find(o => o.id === orderId);
+        if (!order) throw e;
+        if (order.status !== OrderStatus.COMPLETED) {
+          throw new Error('Đơn hàng chưa hoàn thành, không thể thu tiền');
+        }
+        const paid = (order.paidAmount || 0) + amount;
+        if (paid > order.totalAmount) {
+          throw new Error('Số tiền thu vượt quá tổng đơn');
+        }
+        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders.map(o => o.id === orderId ? { ...o, paidAmount: paid } : o)));
+        const payments = await MockBackend.getPayments();
+        const payment: PaymentRecord = { id, kind: 'receivable', orderId, amount, method, createdAt: now, note, customerName: order.customerName };
+        localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...payments]));
+        return payment;
+      }
+    } else {
+      const orders = await MockBackend.getOrders();
+      const order = orders.find(o => o.id === orderId);
+      if (!order) throw new Error('Đơn hàng không tồn tại');
+      if (order.status !== OrderStatus.COMPLETED) {
+        throw new Error('Đơn hàng chưa hoàn thành, không thể thu tiền');
+      }
+      const paid = (order.paidAmount || 0) + amount;
+      if (paid > order.totalAmount) {
+        throw new Error('Số tiền thu vượt quá tổng đơn');
+      }
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders.map(o => o.id === orderId ? { ...o, paidAmount: paid } : o)));
+      const payments = await MockBackend.getPayments();
+      const payment: PaymentRecord = { id, kind: 'receivable', orderId, amount, method, createdAt: now, note, customerName: order.customerName };
+      localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...payments]));
+      return payment;
+    }
+  },
+  
+  addPayablePayment: async (importId: string, amount: number, method: PaymentRecord['method'], note?: string): Promise<PaymentRecord> => {
+    const id = `PAY${Date.now().toString().slice(-8)}`;
+    const now = new Date().toISOString();
+    const imports = await MockBackend.getImports();
+    const imp = imports.find(i => i.id === importId);
+    if (!imp || typeof imp.totalCost !== 'number') throw new Error('Phiếu nhập không hợp lệ');
+    const payment: PaymentRecord = { id, kind: 'payable', importId, amount, method, createdAt: now, note, supplierName: imp.supplierName || imp.note };
+    if (MockBackend.isOnlineMode()) {
+      try {
+        const updates: any = {};
+        updates[`payments/${id}`] = payment;
+        await withTimeout(update(ref(db), updates));
+      } catch (e) {
+        const list = await MockBackend.getPayments();
+        localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...list]));
+      }
+    } else {
+      const list = await MockBackend.getPayments();
+      localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...list]));
+    }
+    return payment;
   },
 
   addProduct: async (product: Omit<Product, 'id' | 'importDate'>) => {
@@ -301,6 +532,18 @@ export const MockBackend = {
     if (MockBackend.isOnlineMode()) {
       try {
         const list = await readPath<Order>('orders', 12000) as any[];
+        const localData = localStorage.getItem(STORAGE_KEYS.ORDERS);
+        const localList: any[] = localData ? JSON.parse(localData) : [];
+        if (localList && localList.length) {
+          const map: Record<string, any> = {};
+          localList.forEach(o => { map[o.id] = o; });
+          list.forEach((o: any, idx: number) => {
+            const loc = map[o.id];
+            if (loc && typeof loc.paidAmount === 'number' && loc.paidAmount !== o.paidAmount) {
+              list[idx] = { ...o, paidAmount: loc.paidAmount };
+            }
+          });
+        }
         return list.sort((a: any, b: any) => 
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         ) as Order[];
@@ -338,14 +581,6 @@ export const MockBackend = {
       try {
         const updates: any = {};
         updates['orders/' + newOrderId] = newOrder;
-        
-        orderData.items.forEach(item => {
-          const product = products.find(p => p.id === item.productId);
-          if (product) {
-            updates['products/' + product.id + '/stock'] = product.stock - item.quantity;
-          }
-        });
-        
         await withTimeout(update(ref(db), updates));
       } catch(e) {
          throw e;
@@ -358,10 +593,46 @@ export const MockBackend = {
   },
 
   updateOrderStatus: async (orderId: string, status: OrderStatus, cancelReason?: string) => {
-    if (!MockBackend.isOnlineMode()) {
-      throw new Error('Chỉ hỗ trợ online');
-    }
     try {
+      if (!MockBackend.isOnlineMode()) {
+        // Offline handling: update local storage records only
+        const ordersLocal = await MockBackend.getOrders();
+        const currentOrder = ordersLocal.find(o => o.id === orderId);
+        if (!currentOrder) throw new Error('Đơn hàng không tồn tại');
+        const products = await MockBackend.getProducts();
+        const payload: any = { status };
+        if (status === OrderStatus.CANCELLED && cancelReason) payload.cancelReason = cancelReason;
+        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(ordersLocal.map(o => o.id === orderId ? { ...o, ...payload } : o)));
+        if (status === OrderStatus.COMPLETED && currentOrder.status !== OrderStatus.COMPLETED) {
+          const newProducts = products.map(p => {
+            const item = currentOrder.items.find(it => it.productId === p.id);
+            return item ? { ...p, stock: Math.max(0, (p.stock || 0) - item.quantity) } : p;
+          });
+          localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(newProducts));
+          const exportsList = await MockBackend.getExports();
+          currentOrder.items.forEach(item => {
+            const product = products.find(p => p.id === item.productId);
+            if (product) {
+              const id = `EXP${Date.now().toString().slice(-8)}_${product.id}`;
+              const record: ExportRecord = {
+                id,
+                productId: product.id,
+                sku: product.sku,
+                name: product.name,
+                quantity: item.quantity,
+                orderId,
+                customerName: currentOrder.customerName,
+                customerPhone: currentOrder.customerPhone,
+                createdAt: new Date().toISOString(),
+              };
+              exportsList.unshift(record);
+            }
+          });
+          localStorage.setItem(STORAGE_KEYS.EXPORTS, JSON.stringify(exportsList));
+        }
+        return;
+      }
+      // Online path
       const orderSnap = await withTimeout(get(ref(db, `orders/${orderId}`)));
       if (!orderSnap || !(orderSnap as any).exists || !(orderSnap as any).exists()) {
         throw new Error('Đơn hàng không tồn tại');
@@ -372,18 +643,68 @@ export const MockBackend = {
       const updates: any = {};
       updates[`orders/${orderId}`] = { ...currentOrder, ...payload };
       
-      if (status === OrderStatus.CANCELLED && currentOrder.status !== OrderStatus.CANCELLED) {
+      if (status === OrderStatus.COMPLETED && currentOrder.status !== OrderStatus.COMPLETED) {
         const products = await MockBackend.getProducts();
         currentOrder.items.forEach(item => {
           const product = products.find(p => p.id === item.productId);
           if (product) {
-            updates[`products/${product.id}/stock`] = product.stock + item.quantity;
+            updates[`products/${product.id}/stock`] = Math.max(0, (product.stock || 0) - item.quantity);
+            const id = `EXP${Date.now().toString().slice(-8)}_${product.id}`;
+            const record: ExportRecord = {
+              id,
+              productId: product.id,
+              sku: product.sku,
+              name: product.name,
+              quantity: item.quantity,
+              orderId: orderId,
+              customerName: currentOrder.customerName,
+              customerPhone: currentOrder.customerPhone,
+              createdAt: new Date().toISOString(),
+            };
+            updates[`exports/${id}`] = record;
           }
         });
       }
       
       await withTimeout(update(ref(db), updates));
     } catch (e) {
+      // On online failure, attempt local fallback to ensure history exists
+      try {
+        const ordersLocal = await MockBackend.getOrders();
+        const currentOrder = ordersLocal.find(o => o.id === orderId);
+        if (currentOrder) {
+          const products = await MockBackend.getProducts();
+          localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(ordersLocal.map(o => o.id === orderId ? { ...o, status, cancelReason } : o)));
+          if (status === OrderStatus.COMPLETED && currentOrder.status !== OrderStatus.COMPLETED) {
+            const exportsList = await MockBackend.getExports();
+            const newProducts = products.map(p => {
+              const item = currentOrder.items.find(it => it.productId === p.id);
+              return item ? { ...p, stock: Math.max(0, (p.stock || 0) - item.quantity) } : p;
+            });
+            localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(newProducts));
+            currentOrder.items.forEach(item => {
+              const product = products.find(p => p.id === item.productId);
+              if (product) {
+                const id = `EXP${Date.now().toString().slice(-8)}_${product.id}`;
+                const record: ExportRecord = {
+                  id,
+                  productId: product.id,
+                  sku: product.sku,
+                  name: product.name,
+                  quantity: item.quantity,
+                  orderId,
+                  customerName: currentOrder.customerName,
+                  customerPhone: currentOrder.customerPhone,
+                  createdAt: new Date().toISOString(),
+                };
+                exportsList.unshift(record);
+              }
+            });
+            localStorage.setItem(STORAGE_KEYS.EXPORTS, JSON.stringify(exportsList));
+          }
+          return;
+        }
+      } catch {}
       throw e;
     }
   },
@@ -450,7 +771,10 @@ export const MockBackend = {
     const orders = await MockBackend.getOrders();
     const customers = await MockBackend.getCustomers();
     const categories = await MockBackend.getCategories();
-    return JSON.stringify({ products, orders, customers, categories });
+    const imports = await MockBackend.getImports();
+    const exports = await MockBackend.getExports();
+    const payments = await MockBackend.getPayments();
+    return JSON.stringify({ products, orders, customers, categories, imports, exports, payments });
   },
 
   importData: async (jsonString: string) => {
@@ -460,6 +784,9 @@ export const MockBackend = {
       const ordersArr: Order[] = Array.isArray(data.orders) ? data.orders : [];
       const customersArr: Customer[] = Array.isArray(data.customers) ? data.customers : [];
       const categoriesArr: Category[] = Array.isArray(data.categories) ? data.categories : [];
+      const importsArr: ImportRecord[] = Array.isArray(data.imports) ? data.imports : [];
+      const exportsArr: ExportRecord[] = Array.isArray(data.exports) ? data.exports : [];
+      const paymentsArr: PaymentRecord[] = Array.isArray(data.payments) ? data.payments : [];
 
       const toKeyed = <T extends { id: string }>(arr: T[]) =>
         arr.reduce((acc: Record<string, T>, item) => {
@@ -474,12 +801,30 @@ export const MockBackend = {
         if (categoriesArr.length) {
           await withTimeout(set(ref(db, 'categories'), toKeyed(categoriesArr)));
         }
+        if (importsArr.length) {
+          await withTimeout(set(ref(db, 'imports'), toKeyed(importsArr)));
+        }
+        if (exportsArr.length) {
+          await withTimeout(set(ref(db, 'exports'), toKeyed(exportsArr)));
+        }
+        if (paymentsArr.length) {
+          await withTimeout(set(ref(db, 'payments'), toKeyed(paymentsArr)));
+        }
       } else {
         localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(productsArr));
         localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(ordersArr));
         localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customersArr));
         if (categoriesArr.length) {
           localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categoriesArr));
+        }
+        if (importsArr.length) {
+          localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(importsArr));
+        }
+        if (exportsArr.length) {
+          localStorage.setItem(STORAGE_KEYS.EXPORTS, JSON.stringify(exportsArr));
+        }
+        if (paymentsArr.length) {
+          localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify(paymentsArr));
         }
       }
       return true;

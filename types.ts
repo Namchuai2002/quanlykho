@@ -39,6 +39,8 @@ export interface Order {
   cancelReason?: string;
   note?: string;
   items: CartItem[];
+  paidAmount?: number;
+  dueDate?: string;
 }
 
 export interface User {
@@ -60,4 +62,42 @@ export interface Customer {
   address: string;
   createdAt: string;
   note?: string;
+}
+
+export interface ImportRecord {
+  id: string;
+  productId: string;
+  sku: string;
+  name: string;
+  quantity: number;
+  unitCost?: number;
+  totalCost?: number;
+  createdAt: string;
+  note?: string;
+  supplierName?: string;
+}
+
+export interface ExportRecord {
+  id: string;
+  productId: string;
+  sku: string;
+  name: string;
+  quantity: number;
+  orderId: string;
+  customerName: string;
+  customerPhone: string;
+  createdAt: string;
+}
+
+export interface PaymentRecord {
+  id: string;
+  kind: 'receivable' | 'payable';
+  orderId?: string;
+  importId?: string;
+  amount: number;
+  method: 'cod' | 'bank' | 'wallet' | 'cash' | 'other';
+  createdAt: string;
+  note?: string;
+  customerName?: string;
+  supplierName?: string;
 }

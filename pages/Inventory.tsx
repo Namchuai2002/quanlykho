@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MockBackend } from '../services/mockBackend';
-import { Product, Category } from '../types';
-import { Search, Plus, Trash2, Edit2, Archive, Loader2, Image as ImageIcon, Filter, Tags, X, UploadCloud, Eye } from 'lucide-react';
+import { Product, Category, Order, OrderStatus } from '../types';
+import { Search, Plus, Trash2, Edit2, Archive, Loader2, Image as ImageIcon, Filter, Tags, X, UploadCloud, Eye, PackagePlus } from 'lucide-react';
 import { Modal } from '../components/Modal';
+import { ImportRecord, ExportRecord } from '../types';
 
 export const Inventory: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
@@ -23,6 +24,15 @@ export const Inventory: React.FC = () => {
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [page, setPage] = useState(1);
   const PER_PAGE = 10;
+  
+  // Import modal state
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importProduct, setImportProduct] = useState<Product | null>(null);
+  const [importForm, setImportForm] = useState({ quantity: 1, unitCost: 0, note: '', supplierName: '', paidNow: false });
+  const [imports, setImports] = useState<ImportRecord[]>([]);
+  const [exports, setExports] = useState<ExportRecord[]>([]);
+  const [notice, setNotice] = useState<string>('');
+  const [orders, setOrders] = useState<Order[]>([]);
 
   // Category Manage Input
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -43,12 +53,18 @@ export const Inventory: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [pData, cData] = await Promise.all([
+      const [pData, cData, iData, eData, oData] = await Promise.all([
         MockBackend.getProducts(),
-        MockBackend.getCategories()
+        MockBackend.getCategories(),
+        MockBackend.getImports(),
+        MockBackend.getExports(),
+        MockBackend.getOrders()
       ]);
       setProducts(pData);
       setCategories(cData);
+      setImports(iData);
+      setExports(eData);
+      setOrders(oData);
     } catch (e) {
       console.error(e);
     } finally {
@@ -85,6 +101,20 @@ export const Inventory: React.FC = () => {
   const lowCount = filteredProducts.filter(p => p.stock >= 5 && p.stock < 10).length;
   const inCount = filteredProducts.filter(p => p.stock >= 10).length;
   const outCount = filteredProducts.filter(p => p.stock === 0).length;
+  
+  const reservedMap = (() => {
+    const map = new Map<string, number>();
+    orders
+      .filter(o => o.status !== OrderStatus.CANCELLED && o.status !== OrderStatus.COMPLETED)
+      .forEach(o => {
+        o.items.forEach(it => {
+          const cur = map.get(it.productId) || 0;
+          map.set(it.productId, cur + it.quantity);
+        });
+      });
+    return map;
+  })();
+  const totalReserved = Array.from(reservedMap.values()).reduce((a, b) => a + b, 0);
 
   // --- XỬ LÝ ẢNH ---
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -143,6 +173,40 @@ export const Inventory: React.FC = () => {
       await loadData();
     }
   };
+  
+  // --- NHẬP HÀNG ---
+  const openImportModal = (product: Product) => {
+    setImportProduct(product);
+    setImportForm({ quantity: 1, unitCost: 0, note: '', supplierName: '', paidNow: false });
+    setIsImportModalOpen(true);
+  };
+  const closeImportModal = () => {
+    setIsImportModalOpen(false);
+    setImportProduct(null);
+  };
+  const handleImportSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importProduct) return;
+    try {
+      setSaving(true);
+      await MockBackend.importStock(
+        importProduct.id,
+        importForm.quantity,
+        importForm.unitCost || undefined,
+        importForm.note || undefined,
+        importForm.supplierName || undefined,
+        importForm.paidNow || false
+      );
+      await loadData();
+      closeImportModal();
+      setNotice(`Đã nhập +${importForm.quantity} cho "${importProduct.name}"`);
+      setTimeout(() => setNotice(''), 3000);
+    } catch (err) {
+      alert("Lỗi nhập hàng. Vui lòng thử lại.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // --- XỬ LÝ DANH MỤC ---
   const handleAddCategory = async () => {
@@ -194,6 +258,11 @@ export const Inventory: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {notice && (
+        <div className="fixed top-4 right-4 z-50 bg-emerald-600 text-white px-4 py-2 rounded shadow">
+          {notice}
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
            <h2 className="text-2xl font-bold text-gray-800">Quản Lý Kho Hàng</h2>
@@ -287,6 +356,10 @@ export const Inventory: React.FC = () => {
           <p className="text-xs text-gray-500">Hết hàng (0)</p>
           <p className="text-lg font-bold text-gray-700">{outCount}</p>
         </div>
+        <div className="bg-white border border-amber-200 rounded-lg p-3">
+          <p className="text-xs text-gray-500">Sắp xuất (đơn chưa hoàn thành)</p>
+          <p className="text-lg font-bold text-amber-700">{totalReserved}</p>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -344,6 +417,9 @@ export const Inventory: React.FC = () => {
                         }`}>
                           {product.stock}
                         </span>
+                        {reservedMap.get(product.id) ? (
+                          <span className="block text-[11px] text-amber-600 mt-1">Sắp xuất: {reservedMap.get(product.id)}</span>
+                        ) : null}
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end space-x-2">
@@ -352,6 +428,13 @@ export const Inventory: React.FC = () => {
                             className="p-1.5 text-gray-700 hover:bg-gray-50 rounded-md transition-colors"
                           >
                             <Eye size={16} />
+                          </button>
+                          <button 
+                            onClick={() => openImportModal(product)}
+                            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"
+                            title="Nhập hàng"
+                          >
+                            <PackagePlus size={16} />
                           </button>
                           <button 
                             onClick={() => openEditProductModal(product)}
@@ -523,6 +606,83 @@ export const Inventory: React.FC = () => {
         </form>
       </Modal>
       
+      {/* --- IMPORT MODAL --- */}
+      <Modal 
+        isOpen={isImportModalOpen} 
+        onClose={closeImportModal} 
+        title="Nhập Hàng"
+      >
+        <form onSubmit={handleImportSubmit} className="space-y-4">
+          {importProduct && (
+            <div className="bg-indigo-50 border border-indigo-100 rounded p-3 text-sm">
+              <p className="font-semibold text-indigo-700">{importProduct.name}</p>
+              <p className="text-indigo-600">SKU: {importProduct.sku} • Tồn hiện tại: {importProduct.stock}</p>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Số lượng nhập</label>
+              <input 
+                required
+                type="number" 
+                min="1"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                value={importForm.quantity}
+                onChange={(e) => setImportForm({...importForm, quantity: Number(e.target.value)})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Giá nhập (VNĐ)</label>
+              <input 
+                type="number" 
+                min="0"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                value={importForm.unitCost}
+                onChange={(e) => setImportForm({...importForm, unitCost: Number(e.target.value)})}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nhà cung cấp</label>
+              <input 
+                type="text"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                value={importForm.supplierName}
+                onChange={(e) => setImportForm({...importForm, supplierName: e.target.value})}
+              />
+            </div>
+            <div className="flex items-center">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input 
+                  type="checkbox" 
+                  checked={importForm.paidNow}
+                  onChange={(e)=>setImportForm({...importForm, paidNow: e.target.checked})}
+                />
+                Đã thanh toán ngay
+              </label>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
+            <textarea 
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              value={importForm.note}
+              onChange={(e) => setImportForm({...importForm, note: e.target.value})}
+              rows={3}
+              placeholder="Ví dụ: Nhập từ nhà cung cấp A"
+            />
+          </div>
+          <div className="pt-2 flex justify-end gap-2">
+            <button type="button" onClick={closeImportModal} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">Hủy</button>
+            <button type="submit" disabled={saving} className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2">
+              {saving && <Loader2 className="animate-spin" size={16} />}
+              {saving ? 'Đang nhập...' : 'Nhập Hàng'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+      
       <Modal 
         isOpen={isDetailOpen} 
         onClose={() => { setIsDetailOpen(false); setDetailProduct(null); }} 
@@ -548,6 +708,49 @@ export const Inventory: React.FC = () => {
               <div className="bg-gray-50 p-3 rounded">
                 <p className="text-sm text-gray-500">Tồn kho</p>
                 <p className="text-xl font-bold text-gray-800">{detailProduct.stock}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-white border border-gray-200 rounded p-3">
+                <p className="font-semibold text-gray-800 mb-2">Lịch sử nhập</p>
+                {imports.filter(i => i.productId === detailProduct.id).length === 0 ? (
+                  <p className="text-sm text-gray-500">Chưa có lịch sử nhập cho sản phẩm này.</p>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {imports.filter(i => i.productId === detailProduct.id).slice(0, 20).map(rec => (
+                      <div key={rec.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
+                        <div className="min-w-0">
+                          <p className="text-xs text-gray-600">{new Date(rec.createdAt).toLocaleString('vi-VN')} • {rec.note || '—'}</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-bold text-emerald-700">+{rec.quantity}</span>
+                          {typeof rec.totalCost === 'number' && (
+                            <span className="block text-[10px] text-gray-600">{rec.totalCost.toLocaleString()} ₫</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="bg-white border border-gray-200 rounded p-3">
+                <p className="font-semibold text-gray-800 mb-2">Lịch sử xuất</p>
+                {exports.filter(e => e.productId === detailProduct.id).length === 0 ? (
+                  <p className="text-sm text-gray-500">Chưa có lịch sử xuất cho sản phẩm này.</p>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {exports.filter(e => e.productId === detailProduct.id).slice(0, 20).map(rec => (
+                      <div key={rec.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
+                        <div className="min-w-0">
+                          <p className="text-xs text-gray-600">{new Date(rec.createdAt).toLocaleString('vi-VN')} • Đơn {rec.orderId} • {rec.customerName}</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-bold text-red-700">-{rec.quantity}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -596,6 +799,53 @@ export const Inventory: React.FC = () => {
           </div>
         </div>
       </Modal>
+      
+      {/* --- LỊCH SỬ NHẬP HÀNG --- */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <h3 className="text-lg font-bold text-gray-800 mb-4">Lịch Sử Nhập Hàng</h3>
+        {imports.length === 0 ? (
+          <p className="text-gray-500 text-sm">Chưa có lịch sử nhập hàng.</p>
+        ) : (
+          <div className="space-y-2">
+            {imports.slice(0, 20).map(rec => (
+              <div key={rec.id} className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200">
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 text-sm truncate">{rec.name} <span className="text-gray-500">({rec.sku})</span></p>
+                  <p className="text-xs text-gray-500">{new Date(rec.createdAt).toLocaleString('vi-VN')} • {rec.note || '—'}</p>
+                </div>
+                <div className="text-right">
+                  <span className="block text-sm font-bold text-emerald-700">+{rec.quantity}</span>
+                  {typeof rec.totalCost === 'number' && (
+                    <span className="text-[10px] text-gray-600">{rec.totalCost.toLocaleString()} ₫</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      
+      {/* --- LỊCH SỬ XUẤT KHO --- */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <h3 className="text-lg font-bold text-gray-800 mb-4">Lịch Sử Xuất Kho</h3>
+        {exports.length === 0 ? (
+          <p className="text-gray-500 text-sm">Chưa có lịch sử xuất kho.</p>
+        ) : (
+          <div className="space-y-2">
+            {exports.slice(0, 20).map(rec => (
+              <div key={rec.id} className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200">
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 text-sm truncate">{rec.name} <span className="text-gray-500">({rec.sku})</span></p>
+                  <p className="text-xs text-gray-500">{new Date(rec.createdAt).toLocaleString('vi-VN')} • Đơn {rec.orderId} • {rec.customerName} ({rec.customerPhone})</p>
+                </div>
+                <div className="text-right">
+                  <span className="block text-sm font-bold text-red-700">-{rec.quantity}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

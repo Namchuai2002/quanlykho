@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Package, ShoppingCart, LogOut, Settings, Users } from 'lucide-react';
+import { LayoutDashboard, Package, ShoppingCart, LogOut, Settings, Users, Banknote } from 'lucide-react';
 
 interface SidebarProps {
   currentPage: string;
@@ -13,6 +13,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, onLog
     { id: 'inventory', label: 'Kho Hàng', icon: <Package size={20} /> },
     { id: 'orders', label: 'Đơn Hàng', icon: <ShoppingCart size={20} /> },
     { id: 'customers', label: 'Khách Hàng', icon: <Users size={20} /> },
+    { id: 'debts', label: 'Công Nợ', icon: <Banknote size={20} /> },
     { id: 'settings', label: 'Cài Đặt', icon: <Settings size={20} /> },
   ];
 

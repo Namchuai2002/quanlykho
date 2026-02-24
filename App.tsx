@@ -10,6 +10,7 @@ import { Login } from './pages/Login';
 import { User } from './types';
 import { MockBackend } from './services/mockBackend';
 import { ChatWidget } from './components/ChatWidget';
+import { Debts } from './pages/Debts';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -45,6 +46,8 @@ const App: React.FC = () => {
         return <Customers />;
       case 'settings':
         return <Settings />;
+      case 'debts':
+        return <Debts />;
       default:
         return <Dashboard />;
     }
