@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Menu, User as UserIcon, Bell, Cloud, HardDrive, Wifi } from 'lucide-react';
+import { Menu, User as UserIcon, Bell, Cloud, HardDrive, Wifi, RefreshCw, Check } from 'lucide-react';
 import { User } from '../types';
 import { MockBackend } from '../services/mockBackend';
 
@@ -10,10 +10,29 @@ interface TopBarProps {
 
 export const TopBar: React.FC<TopBarProps> = ({ user, onMenuClick }) => {
   const [isOnline, setIsOnline] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   useEffect(() => {
     setIsOnline(MockBackend.isOnlineMode());
   }, []);
+
+  const handleSync = async () => {
+    if (!isOnline || isSyncing) return;
+    
+    setIsSyncing(true);
+    setSyncStatus('idle');
+    try {
+      await MockBackend.syncLocalDataToFirebase();
+      setSyncStatus('success');
+      setTimeout(() => setSyncStatus('idle'), 3000);
+    } catch (e) {
+      setSyncStatus('error');
+      setTimeout(() => setSyncStatus('idle'), 3000);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   return (
     <header className="h-16 bg-white shadow-sm flex items-center justify-between px-4 md:px-8 fixed top-0 right-0 left-0 md:left-64 z-10">
@@ -27,9 +46,31 @@ export const TopBar: React.FC<TopBarProps> = ({ user, onMenuClick }) => {
         
         {/* Storage Indicator */}
         {isOnline ? (
-          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 text-green-700 rounded-full text-xs font-medium" title="Dữ liệu được đồng bộ Online">
-            <Cloud size={14} />
-            <span>Online Mode</span>
+          <div className="flex items-center gap-2">
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 text-green-700 rounded-full text-xs font-medium" title="Dữ liệu được đồng bộ Online">
+              <Cloud size={14} />
+              <span>Online Mode</span>
+            </div>
+            
+            <button 
+              onClick={handleSync}
+              disabled={isSyncing}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                syncStatus === 'success' 
+                  ? 'bg-blue-50 text-blue-600 border border-blue-200' 
+                  : syncStatus === 'error'
+                  ? 'bg-red-50 text-red-600 border border-red-200'
+                  : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+              title="Đồng bộ dữ liệu từ thiết bị này lên hệ thống"
+            >
+              {syncStatus === 'success' ? (
+                <Check size={14} />
+              ) : (
+                <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+              )}
+              <span className="hidden xs:inline">{isSyncing ? 'Đang đồng bộ...' : syncStatus === 'success' ? 'Đã đồng bộ' : 'Đồng bộ'}</span>
+            </button>
           </div>
         ) : (
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-yellow-50 border border-yellow-200 text-yellow-700 rounded-full text-xs font-medium" title="Dữ liệu chỉ được lưu trên thiết bị này">

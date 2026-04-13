@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { MockBackend } from '../services/mockBackend';
-import { Order, ImportRecord, PaymentRecord } from '../types';
+import { Order, ImportRecord, PaymentRecord, OrderStatus } from '../types';
 import { Banknote, Wallet, CreditCard, Loader2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
+import { NumberInput } from '../components/NumberInput';
 
 export const Debts: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -12,6 +13,8 @@ export const Debts: React.FC = () => {
   const [tab, setTab] = useState<'receivable'|'payable'>('receivable');
   const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
+  const [historySearch, setHistorySearch] = useState('');
+  const [historySearchPay, setHistorySearchPay] = useState('');
   const [filterStatusRec, setFilterStatusRec] = useState<'all'|'unpaid'|'partial'|'paid'>('all');
   const [filterStatusPay, setFilterStatusPay] = useState<'all'|'unpaid'|'partial'|'paid'>('all');
 
@@ -36,8 +39,21 @@ export const Debts: React.FC = () => {
 
   useEffect(() => { load(); }, []);
 
+  type ReceivablePaymentResolved = PaymentRecord & { resolvedCustomerName: string };
+  type ReceivablePaymentGroup = { customerName: string; total: number; latestAt: string; payments: ReceivablePaymentResolved[] };
+  type PaidOrderForHistory = Order & { paid: number; outstanding: number };
+  type PaidOrderGroup = { customerName: string; totalPaid: number; totalOutstanding: number; latestAt: string; orders: PaidOrderForHistory[] };
+
+  const searchLower = search.trim().toLowerCase();
+  const historySearchLower = historySearch.trim().toLowerCase();
+  const orderById = new Map<string, Order>(orders.map(o => [o.id, o]));
+
   const receivables = orders.map(o => {
-    const paidSum = payments.filter(p => p.kind === 'receivable' && p.orderId === o.id).reduce((s, p) => s + p.amount, 0);
+    const paidFromPayments = payments
+      .filter(p => p.kind === 'receivable' && p.orderId === o.id)
+      .reduce((s, p) => s + p.amount, 0);
+    const paidFromOrder = typeof o.paidAmount === 'number' ? o.paidAmount : 0;
+    const paidSum = Math.max(paidFromPayments, paidFromOrder);
     return {
       id: o.id,
       name: o.customerName,
@@ -75,23 +91,145 @@ export const Debts: React.FC = () => {
     (filterStatusPay === 'all' ? true : r.status === filterStatusPay)
   );
 
+  // --- LOGIC HỢP NHẤT LỊCH SỬ THU TIỀN ---
+  const unifiedHistory = (() => {
+    // 1. Lấy tất cả payments thực tế
+    const actualPayments = payments
+      .filter(p => p.kind === 'receivable')
+      .map(p => {
+        const fallbackCustomerName = p.orderId ? orderById.get(p.orderId)?.customerName : undefined;
+        return {
+          id: p.id,
+          orderId: p.orderId,
+          amount: p.amount,
+          method: p.method,
+          createdAt: p.createdAt,
+          resolvedCustomerName: p.customerName || fallbackCustomerName || 'Khách'
+        };
+      });
+
+    // 2. Tính tổng tiền đã thu theo payment records cho mỗi đơn hàng
+    const actualPaidByOrder = actualPayments.reduce((acc, p) => {
+      if (!p.orderId) return acc;
+      acc.set(p.orderId, (acc.get(p.orderId) || 0) + p.amount);
+      return acc;
+    }, new Map<string, number>());
+
+    // 3. Tìm các đơn hàng có paidAmount lớn hơn tổng payment records (phần chênh lệch - gap)
+    const fallbackPayments = orders
+      .filter(o => (o.paidAmount || 0) > (actualPaidByOrder.get(o.id) || 0))
+      .map(o => ({
+        id: `gap_${o.id}`,
+        orderId: o.id,
+        amount: (o.paidAmount || 0) - (actualPaidByOrder.get(o.id) || 0),
+        method: 'other' as const,
+        createdAt: o.lastPaidAt || o.createdAt,
+        resolvedCustomerName: o.customerName || 'Khách',
+        isGap: true
+      }));
+
+    return [...actualPayments, ...fallbackPayments]
+      .filter(p => {
+        const s = (historySearch.trim() || search.trim()).toLowerCase();
+        if (!s) return true;
+        return p.resolvedCustomerName.toLowerCase().includes(s) || (p.orderId && p.orderId.toLowerCase().includes(s));
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  })();
+
+  const historyByCustomer = new Map<string, { customerName: string; total: number; latestAt: string; items: typeof unifiedHistory }>();
+  for (const p of unifiedHistory) {
+    const key = p.resolvedCustomerName;
+    const cur = historyByCustomer.get(key);
+    if (!cur) {
+      historyByCustomer.set(key, { customerName: key, total: p.amount, latestAt: p.createdAt, items: [p] });
+    } else {
+      cur.total += p.amount;
+      if (new Date(p.createdAt).getTime() > new Date(cur.latestAt).getTime()) cur.latestAt = p.createdAt;
+      cur.items.push(p);
+    }
+  }
+
+  const historyGroups = Array.from(historyByCustomer.values()).sort(
+    (a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime()
+  );
+
+  // --- LOGIC HỢP NHẤT LỊCH SỬ THANH TOÁN NCC ---
+  const unifiedHistoryPay = (() => {
+    const actualPayments = payments
+      .filter(p => p.kind === 'payable')
+      .map(p => ({
+        id: p.id,
+        importId: p.importId,
+        amount: p.amount,
+        method: p.method,
+        createdAt: p.createdAt,
+        resolvedSupplierName: p.supplierName || 'Nhà cung cấp'
+      }));
+
+    const actualPaidByImport = actualPayments.reduce((acc, p) => {
+      if (!p.importId) return acc;
+      acc.set(p.importId, (acc.get(p.importId) || 0) + p.amount);
+      return acc;
+    }, new Map<string, number>());
+
+    const fallbackPayments = imports
+      .filter(i => typeof i.totalCost === 'number' && (actualPaidByImport.get(i.id) || 0) < (i.totalCost || 0) && (actualPaidByImport.get(i.id) || 0) > 0)
+      .map(i => ({
+        id: `gap_imp_${i.id}`,
+        importId: i.id,
+        amount: 0, // We don't have a specific gap amount to show as a "payment" here if it's just partially paid but no records, but let's stick to actual records for now or logic similar to receivable
+        method: 'other' as const,
+        createdAt: i.createdAt,
+        resolvedSupplierName: i.supplierName || i.note || 'Nhà cung cấp',
+        isGap: true
+      })).filter(x => false); // Simplifying for now, only showing actual payments for payable unless requested otherwise.
+
+    return [...actualPayments]
+      .filter(p => {
+        const s = (historySearchPay.trim() || search.trim()).toLowerCase();
+        if (!s) return true;
+        return p.resolvedSupplierName.toLowerCase().includes(s) || (p.importId && p.importId.toLowerCase().includes(s));
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  })();
+
+  const historyBySupplier = new Map<string, { supplierName: string; total: number; latestAt: string; items: typeof unifiedHistoryPay }>();
+  for (const p of unifiedHistoryPay) {
+    const key = p.resolvedSupplierName;
+    const cur = historyBySupplier.get(key);
+    if (!cur) {
+      historyBySupplier.set(key, { supplierName: key, total: p.amount, latestAt: p.createdAt, items: [p] });
+    } else {
+      cur.total += p.amount;
+      if (new Date(p.createdAt).getTime() > new Date(cur.latestAt).getTime()) cur.latestAt = p.createdAt;
+      cur.items.push(p);
+    }
+  }
+
+  const historyGroupsPay = Array.from(historyBySupplier.values()).sort(
+    (a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime()
+  );
+
   const receivableSummary = {
     total: receivables.reduce((s, r) => s + r.total, 0),
     paid: receivables.reduce((s, r) => s + r.paid, 0),
     outstanding: receivables.reduce((s, r) => s + r.outstanding, 0),
-    topDebtor: receivables.slice().sort((a, b) => b.outstanding - a.outstanding)[0]
+    topDebtor: receivables.filter(r => r.outstanding > 0).slice().sort((a, b) => b.outstanding - a.outstanding)[0],
+    debtCount: receivables.filter(r => r.outstanding > 0).length
   };
   const payableSummary = {
     total: payables.reduce((s, r) => s + r.total, 0),
     paid: payables.reduce((s, r) => s + r.paid, 0),
     outstanding: payables.reduce((s, r) => s + r.outstanding, 0),
-    topSupplier: payables.slice().sort((a, b) => b.outstanding - a.outstanding)[0]
+    topSupplier: payables.filter(r => r.outstanding > 0).slice().sort((a, b) => b.outstanding - a.outstanding)[0],
+    debtCount: payables.filter(r => r.outstanding > 0).length
   };
 
   const openReceivablePay = (orderId: string) => {
     const o = receivables.find(r => r.id === orderId);
     if (!o) return;
-    if (o.orderStatus !== 'Hoàn thành') {
+    if (o.orderStatus !== OrderStatus.COMPLETED) {
       setNotice('Đơn hàng chưa hoàn thành, không thể thu tiền');
       setTimeout(()=>setNotice(''), 3000);
       return;
@@ -118,6 +256,16 @@ export const Debts: React.FC = () => {
   const submitPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!payContext) return;
+    if (!Number.isFinite(payAmount) || payAmount <= 0) {
+      setNotice('Số tiền thanh toán phải > 0');
+      setTimeout(()=>setNotice(''), 3000);
+      return;
+    }
+    if (payAmount > payContext.outstanding) {
+      setNotice('Số tiền thanh toán vượt quá số còn nợ');
+      setTimeout(()=>setNotice(''), 3000);
+      return;
+    }
     setSaving(true);
     try {
       if (payContext.kind === 'receivable' && payContext.orderId) {
@@ -166,7 +314,7 @@ export const Debts: React.FC = () => {
         <>
           <div className="flex items-center gap-3">
             <input 
-              placeholder="Tìm theo tên hoặc mã đơn..."
+              placeholder="Tìm theo tên khách hoặc mã đơn..."
               className="px-3 py-2 border border-gray-300 rounded-lg"
               value={search}
               onChange={(e)=>setSearch(e.target.value)}
@@ -193,7 +341,7 @@ export const Debts: React.FC = () => {
             </div>
             <div className="bg-white border border-gray-200 rounded p-4">
               <p className="text-xs text-gray-500">Tổng đơn nợ</p>
-              <p className="text-xl font-bold text-indigo-700">{receivables.length}</p>
+              <p className="text-xl font-bold text-indigo-700">{receivableSummary.debtCount}</p>
             </div>
             <div className="bg-white border border-gray-200 rounded p-4">
               <p className="text-xs text-gray-500">Khách nợ nhiều nhất</p>
@@ -227,7 +375,7 @@ export const Debts: React.FC = () => {
                       <td className="px-6 py-4 text-right">
                         <button 
                           onClick={()=>openReceivablePay(r.id)} 
-                          disabled={r.outstanding <= 0 || r.orderStatus !== 'Hoàn thành'}
+                          disabled={r.outstanding <= 0 || r.orderStatus !== OrderStatus.COMPLETED}
                           className="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm disabled:opacity-50"
                         >
                           Thu tiền
@@ -237,7 +385,7 @@ export const Debts: React.FC = () => {
                   ))}
                   {filteredReceivables.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center text-gray-400">Không có đơn nợ.</td>
+                      <td colSpan={7} className="px-6 py-12 text-center text-gray-400">Không có đơn nợ.</td>
                     </tr>
                   )}
                 </tbody>
@@ -247,19 +395,48 @@ export const Debts: React.FC = () => {
           
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-bold text-gray-800 mb-3">Lịch sử thu tiền</h3>
+            <div className="flex items-center gap-3 mb-3">
+              <input
+                placeholder="Tìm theo tên khách hàng..."
+                className="px-3 py-2 border border-gray-300 rounded-lg w-full"
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+              />
+            </div>
             <div className="space-y-2 max-h-64 overflow-y-auto">
-              {payments.filter(p=>p.kind==='receivable').slice(0,30).map(p=>(
-                <div key={p.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800">Đơn {p.orderId} • {p.customerName || 'Khách'}</p>
-                    <p className="text-xs text-gray-600">{new Date(p.createdAt).toLocaleString('vi-VN')} • {p.method}</p>
+              {historyGroups.length > 0 ? (
+                historyGroups.map(g => (
+                  <div key={g.customerName} className="bg-gray-50 rounded border border-gray-200">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 py-2 border-b border-gray-200 gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-800 truncate">{g.customerName}</p>
+                        <p className="text-xs text-gray-600">{g.items.length} lần thu • Gần nhất {new Date(g.latestAt).toLocaleString('vi-VN')}</p>
+                      </div>
+                      <div className="text-left sm:text-right">
+                        <span className="text-sm font-bold text-emerald-700">{g.total.toLocaleString()} ₫</span>
+                      </div>
+                    </div>
+                    <div className="divide-y divide-gray-200">
+                      {g.items.slice(0, 15).map(p => (
+                        <div key={p.id} className="flex flex-col sm:flex-row sm:items-center justify-between px-3 py-2 gap-1">
+                          <div className="min-w-0">
+                            <p className="text-sm text-gray-800 font-medium sm:font-normal">Đơn {p.orderId}</p>
+                            <p className="text-xs text-gray-600">
+                              {new Date(p.createdAt).toLocaleString('vi-VN')} • {p.method === 'other' ? 'Hệ thống' : p.method}
+                              {'isGap' in p && p.isGap ? ' (Cập nhật trực tiếp)' : ''}
+                            </p>
+                          </div>
+                          <div className="text-left sm:text-right">
+                            <span className="text-sm font-bold text-emerald-700">{p.amount.toLocaleString()} ₫</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-sm font-bold text-emerald-700">{p.amount.toLocaleString()} ₫</span>
-                  </div>
-                </div>
-              ))}
-              {payments.filter(p=>p.kind==='receivable').length===0 && <p className="text-sm text-gray-500">Chưa có lịch sử thu tiền.</p>}
+                ))
+              ) : (
+                <p className="text-sm text-gray-500">Chưa có lịch sử thu tiền.</p>
+              )}
             </div>
           </div>
         </>
@@ -294,7 +471,7 @@ export const Debts: React.FC = () => {
             </div>
             <div className="bg-white border border-gray-200 rounded p-4">
               <p className="text-xs text-gray-500">Phiếu nhập còn nợ</p>
-              <p className="text-xl font-bold text-indigo-700">{payables.length}</p>
+              <p className="text-xl font-bold text-indigo-700">{payableSummary.debtCount}</p>
             </div>
             <div className="bg-white border border-gray-200 rounded p-4">
               <p className="text-xs text-gray-500">NCC nợ nhiều nhất</p>
@@ -336,7 +513,7 @@ export const Debts: React.FC = () => {
                   ))}
                   {filteredPayables.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-6 py-12 text-center text-gray-400">Không có công nợ phải trả.</td>
+                      <td colSpan={6} className="px-6 py-12 text-center text-gray-400">Không có công nợ phải trả.</td>
                     </tr>
                   )}
                 </tbody>
@@ -346,19 +523,45 @@ export const Debts: React.FC = () => {
           
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-bold text-gray-800 mb-3">Lịch sử thanh toán</h3>
+            <div className="flex items-center gap-3 mb-3">
+              <input
+                placeholder="Tìm theo tên NCC hoặc mã phiếu nhập..."
+                className="px-3 py-2 border border-gray-300 rounded-lg w-full"
+                value={historySearchPay}
+                onChange={(e) => setHistorySearchPay(e.target.value)}
+              />
+            </div>
             <div className="space-y-2 max-h-64 overflow-y-auto">
-              {payments.filter(p=>p.kind==='payable').slice(0,30).map(p=>(
-                <div key={p.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800">{p.supplierName || 'Nhà cung cấp'}</p>
-                    <p className="text-xs text-gray-600">{new Date(p.createdAt).toLocaleString('vi-VN')} • {p.method}</p>
+              {historyGroupsPay.length > 0 ? (
+                historyGroupsPay.map(g => (
+                  <div key={g.supplierName} className="bg-gray-50 rounded border border-gray-200">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 py-2 border-b border-gray-200 gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-800 truncate">{g.supplierName}</p>
+                        <p className="text-xs text-gray-600">{g.items.length} lần trả • Gần nhất {new Date(g.latestAt).toLocaleString('vi-VN')}</p>
+                      </div>
+                      <div className="text-left sm:text-right">
+                        <span className="text-sm font-bold text-emerald-700">{g.total.toLocaleString()} ₫</span>
+                      </div>
+                    </div>
+                    <div className="divide-y divide-gray-200">
+                      {g.items.slice(0, 15).map(p => (
+                        <div key={p.id} className="flex flex-col sm:flex-row sm:items-center justify-between px-3 py-2 gap-1">
+                          <div className="min-w-0">
+                            <p className="text-sm text-gray-800 font-medium sm:font-normal">Phiếu {p.importId}</p>
+                            <p className="text-xs text-gray-600">{new Date(p.createdAt).toLocaleString('vi-VN')} • {p.method}</p>
+                          </div>
+                          <div className="text-left sm:text-right">
+                            <span className="text-sm font-bold text-emerald-700">{p.amount.toLocaleString()} ₫</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-sm font-bold text-emerald-700">{p.amount.toLocaleString()} ₫</span>
-                  </div>
-                </div>
-              ))}
-              {payments.filter(p=>p.kind==='payable').length===0 && <p className="text-sm text-gray-500">Chưa có lịch sử thanh toán.</p>}
+                ))
+              ) : (
+                <p className="text-sm text-gray-500">Chưa có lịch sử thanh toán.</p>
+              )}
             </div>
           </div>
         </>
@@ -373,11 +576,16 @@ export const Debts: React.FC = () => {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Số tiền</label>
-              <input type="number" min="0" value={payAmount} onChange={(e)=>setPayAmount(Number(e.target.value))} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              <NumberInput 
+                value={payAmount} 
+                onChange={(val) => setPayAmount(val)} 
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                suffix="₫"
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Phương thức</label>
-              <select value={payMethod} onChange={(e)=>setPayMethod(e.target.value as any)} className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+              <select value={payMethod} onChange={(e)=>setPayMethod(e.target.value as any)} className="w-full px-3 py-2 border border-gray-300 rounded-lg h-[42px]">
                 <option value="cash">Tiền mặt</option>
                 <option value="cod">COD</option>
                 <option value="bank">Chuyển khoản</option>

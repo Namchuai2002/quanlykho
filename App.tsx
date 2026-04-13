@@ -14,14 +14,24 @@ import { Debts } from './pages/Debts';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
-  const [currentPage, setCurrentPage] = useState('dashboard');
+  const [currentPage, setCurrentPage] = useState(() => {
+    return localStorage.getItem('current_page') || 'dashboard';
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('current_page', currentPage);
+  }, [currentPage]);
 
   useEffect(() => {
     // Check for persisted session
     const currentUser = MockBackend.getCurrentUser();
     if (currentUser) {
       setUser(currentUser);
+      // Auto-sync data if online
+      if (MockBackend.isOnlineMode()) {
+        MockBackend.syncLocalDataToFirebase().catch(console.error);
+      }
     }
   }, []);
 

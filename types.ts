@@ -40,6 +40,7 @@ export interface Order {
   note?: string;
   items: CartItem[];
   paidAmount?: number;
+  lastPaidAt?: string;
   dueDate?: string;
 }
 

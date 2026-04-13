@@ -285,25 +285,25 @@ export const MockBackend = {
   },
   
   getPayments: async (): Promise<PaymentRecord[]> => {
+    let firebaseList: PaymentRecord[] = [];
     if (MockBackend.isOnlineMode()) {
       try {
-        const list = await readPath<PaymentRecord>('payments', 12000) as any[];
-        if (!list || list.length === 0) {
-          const local = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
-          const l = local ? JSON.parse(local) : [];
-          return l.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        }
-        return list.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        firebaseList = await readPath<PaymentRecord>('payments', 12000) as any[];
       } catch (e) {
-        const local = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
-        const l = local ? JSON.parse(local) : [];
-        return l.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        console.error("Firebase getPayments failed, using local fallback", e);
       }
-    } else {
-      const data = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
-      const list = data ? JSON.parse(data) : [];
-      return list.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }
+    
+    const local = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
+    const localList = local ? JSON.parse(local) : [];
+    
+    // Merge: Ưu tiên Firebase, thêm local nếu ID chưa có
+    const map = new Map<string, PaymentRecord>();
+    localList.forEach((p: PaymentRecord) => map.set(p.id, p));
+    firebaseList.forEach((p: PaymentRecord) => map.set(p.id, p));
+    
+    const combined = Array.from(map.values());
+    return combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   },
 
   importStock: async (productId: string, quantity: number, unitCost?: number, note?: string, supplierName?: string, paidNow?: boolean): Promise<ImportRecord> => {
@@ -384,6 +384,9 @@ export const MockBackend = {
   addOrderPayment: async (orderId: string, amount: number, method: PaymentRecord['method'], note?: string): Promise<PaymentRecord> => {
     const id = `PAY${Date.now().toString().slice(-8)}`;
     const now = new Date().toISOString();
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('Số tiền thu phải > 0');
+    }
     if (MockBackend.isOnlineMode()) {
       try {
         const orderSnap = await withTimeout(get(ref(db, `orders/${orderId}`)));
@@ -401,8 +404,16 @@ export const MockBackend = {
         const payment: PaymentRecord = { id, kind: 'receivable', orderId, amount, method, createdAt: now, note, customerName: order.customerName };
         const updates: any = {};
         updates[`orders/${orderId}/paidAmount`] = paid;
+        updates[`orders/${orderId}/lastPaidAt`] = now;
         updates[`payments/${id}`] = payment;
         await withTimeout(update(ref(db), updates));
+        
+        // Cập nhật luôn local storage để đồng bộ ngay lập tức
+        const localOrders = await MockBackend.getOrders();
+        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(localOrders.map(o => o.id === orderId ? { ...o, paidAmount: paid, lastPaidAt: now } : o)));
+        const localPayments = await MockBackend.getPayments();
+        localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...localPayments.filter(p => p.id !== id)]));
+        
         return payment;
       } catch (e) {
         const orders = await MockBackend.getOrders();
@@ -415,7 +426,7 @@ export const MockBackend = {
         if (paid > order.totalAmount) {
           throw new Error('Số tiền thu vượt quá tổng đơn');
         }
-        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders.map(o => o.id === orderId ? { ...o, paidAmount: paid } : o)));
+        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders.map(o => o.id === orderId ? { ...o, paidAmount: paid, lastPaidAt: now } : o)));
         const payments = await MockBackend.getPayments();
         const payment: PaymentRecord = { id, kind: 'receivable', orderId, amount, method, createdAt: now, note, customerName: order.customerName };
         localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...payments]));
@@ -432,7 +443,7 @@ export const MockBackend = {
       if (paid > order.totalAmount) {
         throw new Error('Số tiền thu vượt quá tổng đơn');
       }
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders.map(o => o.id === orderId ? { ...o, paidAmount: paid } : o)));
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders.map(o => o.id === orderId ? { ...o, paidAmount: paid, lastPaidAt: now } : o)));
       const payments = await MockBackend.getPayments();
       const payment: PaymentRecord = { id, kind: 'receivable', orderId, amount, method, createdAt: now, note, customerName: order.customerName };
       localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...payments]));
@@ -443,9 +454,19 @@ export const MockBackend = {
   addPayablePayment: async (importId: string, amount: number, method: PaymentRecord['method'], note?: string): Promise<PaymentRecord> => {
     const id = `PAY${Date.now().toString().slice(-8)}`;
     const now = new Date().toISOString();
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('Số tiền thanh toán phải > 0');
+    }
     const imports = await MockBackend.getImports();
     const imp = imports.find(i => i.id === importId);
     if (!imp || typeof imp.totalCost !== 'number') throw new Error('Phiếu nhập không hợp lệ');
+    const existingPayments = await MockBackend.getPayments();
+    const paidSum = existingPayments
+      .filter(p => p.kind === 'payable' && p.importId === importId)
+      .reduce((s, p) => s + p.amount, 0);
+    if (paidSum + amount > imp.totalCost) {
+      throw new Error('Số tiền thanh toán vượt quá tổng phải trả');
+    }
     const payment: PaymentRecord = { id, kind: 'payable', importId, amount, method, createdAt: now, note, supplierName: imp.supplierName || imp.note };
     if (MockBackend.isOnlineMode()) {
       try {
@@ -453,12 +474,10 @@ export const MockBackend = {
         updates[`payments/${id}`] = payment;
         await withTimeout(update(ref(db), updates));
       } catch (e) {
-        const list = await MockBackend.getPayments();
-        localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...list]));
+        localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...existingPayments]));
       }
     } else {
-      const list = await MockBackend.getPayments();
-      localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...list]));
+      localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...existingPayments]));
     }
     return payment;
   },
@@ -527,23 +546,62 @@ export const MockBackend = {
     }
   },
 
+  // --- SYNC LOCAL DATA TO FIREBASE ---
+  syncLocalDataToFirebase: async () => {
+    if (!MockBackend.isOnlineMode()) return;
+    
+    try {
+      const results = { orders: 0, payments: 0 };
+      
+      // 1. Sync Payments
+      const localPayments = JSON.parse(localStorage.getItem(STORAGE_KEYS.PAYMENTS) || '[]');
+      const firebasePayments = await readPath<PaymentRecord>('payments', 12000);
+      const fbIds = new Set(firebasePayments.map(p => p.id));
+      
+      const missingPayments = localPayments.filter((p: PaymentRecord) => !fbIds.has(p.id));
+      if (missingPayments.length > 0) {
+        const updates: any = {};
+        missingPayments.forEach((p: PaymentRecord) => { updates[`payments/${p.id}`] = p; });
+        await withTimeout(update(ref(db), updates));
+        results.payments = missingPayments.length;
+      }
+
+      // 2. Sync Order paidAmount
+      const localOrders = JSON.parse(localStorage.getItem(STORAGE_KEYS.ORDERS) || '[]');
+      const firebaseOrders = await readPath<Order>('orders', 12000);
+      const fbOrderMap = new Map(firebaseOrders.map(o => [o.id, o]));
+      
+      const orderUpdates: any = {};
+      localOrders.forEach((lo: Order) => {
+        const fo = fbOrderMap.get(lo.id);
+        if (fo) {
+          const lPaid = lo.paidAmount || 0;
+          const fPaid = fo.paidAmount || 0;
+          if (lPaid > fPaid) {
+            orderUpdates[`orders/${lo.id}/paidAmount`] = lPaid;
+            if (lo.lastPaidAt) orderUpdates[`orders/${lo.id}/lastPaidAt`] = lo.lastPaidAt;
+          }
+        }
+      });
+      
+      if (Object.keys(orderUpdates).length > 0) {
+        await withTimeout(update(ref(db), orderUpdates));
+        results.orders = Object.keys(orderUpdates).length;
+      }
+      
+      console.log("Đồng bộ dữ liệu thành công:", results);
+      return results;
+    } catch (e) {
+      console.error("Lỗi đồng bộ dữ liệu:", e);
+      throw e;
+    }
+  },
+
   // --- ORDERS ---
   getOrders: async (): Promise<Order[]> => {
     if (MockBackend.isOnlineMode()) {
       try {
         const list = await readPath<Order>('orders', 12000) as any[];
-        const localData = localStorage.getItem(STORAGE_KEYS.ORDERS);
-        const localList: any[] = localData ? JSON.parse(localData) : [];
-        if (localList && localList.length) {
-          const map: Record<string, any> = {};
-          localList.forEach(o => { map[o.id] = o; });
-          list.forEach((o: any, idx: number) => {
-            const loc = map[o.id];
-            if (loc && typeof loc.paidAmount === 'number' && loc.paidAmount !== o.paidAmount) {
-              list[idx] = { ...o, paidAmount: loc.paidAmount };
-            }
-          });
-        }
         return list.sort((a: any, b: any) => 
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         ) as Order[];
@@ -832,5 +890,31 @@ export const MockBackend = {
       console.error("Import failed", e);
       return false;
     }
+  },
+
+  deleteAllData: async () => {
+    if (MockBackend.isOnlineMode()) {
+      try {
+        await withTimeout(set(ref(db, 'products'), null));
+        await withTimeout(set(ref(db, 'orders'), null));
+        await withTimeout(set(ref(db, 'customers'), null));
+        await withTimeout(set(ref(db, 'categories'), null));
+        await withTimeout(set(ref(db, 'imports'), null));
+        await withTimeout(set(ref(db, 'exports'), null));
+        await withTimeout(set(ref(db, 'payments'), null));
+      } catch (e) {
+        console.error("Clear Firebase data failed", e);
+        throw e;
+      }
+    }
+    
+    // Luôn xóa sạch LocalStorage liên quan đến app
+    Object.values(STORAGE_KEYS).forEach(key => {
+      if (key !== STORAGE_KEYS.USER) { // Giữ lại phiên đăng nhập nếu muốn, hoặc xóa hết
+        localStorage.removeItem(key);
+      }
+    });
+    
+    return true;
   }
 };

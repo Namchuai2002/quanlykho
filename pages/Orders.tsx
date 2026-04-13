@@ -3,6 +3,7 @@ import { MockBackend } from '../services/mockBackend';
 import { Order, OrderStatus, Product, CartItem, Customer } from '../types';
 import { Search, Plus, Eye, CheckCircle, Truck, XCircle, Clock, Loader2, Edit2, Trash2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
+import { NumberInput } from '../components/NumberInput';
 
 export const Orders: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -433,9 +434,9 @@ export const Orders: React.FC = () => {
 
           <div className="border-t border-b border-gray-100 py-4">
             <h4 className="text-sm font-bold text-gray-700 mb-3">Chọn Sản Phẩm</h4>
-            <div className="flex gap-2 mb-3">
+            <div className="flex flex-col sm:flex-row gap-2 mb-3 items-start sm:items-center">
               <select 
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="flex-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 value={selectedProductId}
                 onChange={(e) => setSelectedProductId(e.target.value)}
               >
@@ -449,62 +450,61 @@ export const Orders: React.FC = () => {
                   );
                 })}
               </select>
-              <input 
-                type="number"
-                min={1}
-                className="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                value={newOrderQuantity}
-                onChange={(e) => setNewOrderQuantity(Math.max(1, Number(e.target.value)))}
-              />
-              <button 
-                type="button"
-                onClick={addToCart}
-                className="px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700"
-              >
-                Thêm
-              </button>
+              <div className="flex gap-2 w-full sm:w-auto">
+                <NumberInput 
+                  value={newOrderQuantity}
+                  onChange={(val) => setNewOrderQuantity(Math.max(1, val))}
+                  className="w-full sm:w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="Số lượng"
+                />
+                <button 
+                  type="button"
+                  onClick={addToCart}
+                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 h-[42px] flex items-center justify-center font-bold shadow-sm whitespace-nowrap min-w-[80px]"
+                >
+                  THÊM
+                </button>
+              </div>
             </div>
 
             {/* Cart Items */}
-            <div className="bg-gray-50 rounded-lg p-3 space-y-2 max-h-40 overflow-y-auto">
-              {cart.length === 0 ? (
-                <p className="text-center text-gray-400 text-sm">Chưa có sản phẩm nào</p>
-              ) : (
-                cart.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center bg-white p-2 rounded shadow-sm">
-                    <div>
-                      <p className="text-sm font-medium">{item.name}</p>
-                      <p className="text-xs text-gray-500">{item.price.toLocaleString()} x {item.quantity}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input 
-                        type="number"
-                        min={1}
-                        className="w-20 px-2 py-1 border border-gray-300 rounded"
-                        value={item.quantity}
-                        onChange={(e) => {
-                          const q = Math.max(1, Number(e.target.value));
-                          const product = products.find(p => p.id === item.productId);
-                          if (product && q > product.stock) {
-                            alert(`Chỉ còn ${product.stock} sản phẩm trong kho.`);
-                            return;
-                          }
-                          setCart(cart.map(ci => ci.productId === item.productId ? { ...ci, quantity: q } : ci));
-                        }}
-                      />
-                    </div>
-                    <button 
-                      type="button"
-                      onClick={() => removeFromCart(item.productId)}
-                      className="text-red-500 hover:bg-red-50 p-1 rounded"
-                    >
-                      <XCircle size={16} />
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+                <div className="bg-gray-50 rounded-lg p-3 space-y-2 max-h-40 overflow-y-auto">
+                  {cart.length === 0 ? (
+                    <p className="text-center text-gray-400 text-sm">Chưa có sản phẩm nào</p>
+                  ) : (
+                    cart.map((item, idx) => (
+                      <div key={idx} className="flex justify-between items-center bg-white p-2 rounded shadow-sm">
+                        <div className="flex-1 min-w-0 mr-4">
+                          <p className="text-sm font-medium truncate">{item.name}</p>
+                          <p className="text-xs text-gray-500">{item.price.toLocaleString()}đ x {item.quantity}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <NumberInput 
+                            value={item.quantity}
+                            onChange={(q) => {
+                              const finalQ = Math.max(1, q);
+                              const product = products.find(p => p.id === item.productId);
+                              if (product && finalQ > product.stock) {
+                                alert(`Chỉ còn ${product.stock} sản phẩm trong kho.`);
+                                return;
+                              }
+                              setCart(cart.map(ci => ci.productId === item.productId ? { ...ci, quantity: finalQ } : ci));
+                            }}
+                            className="w-20 px-2 py-1 border border-gray-300 rounded text-sm"
+                          />
+                        </div>
+                        <button 
+                          type="button"
+                          onClick={() => removeFromCart(item.productId)}
+                          className="text-red-500 hover:bg-red-50 p-1 rounded ml-2"
+                        >
+                          <XCircle size={16} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
 
           <div className="mt-4">
             <label className="block text-sm font-medium text-gray-700 mb-1">Chú Thích Đơn</label>

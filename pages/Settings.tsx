@@ -115,6 +115,25 @@ export const Settings: React.FC = () => {
     e.target.value = ''; // Reset input
   };
 
+  const handleDeleteAllData = async () => {
+    const confirm1 = window.confirm("CẢNH BÁO: Hành động này sẽ xóa VĨNH VIỄN toàn bộ dữ liệu (Sản phẩm, Đơn hàng, Khách hàng...). Bạn có chắc chắn không?");
+    if (!confirm1) return;
+    
+    const confirm2 = window.confirm("Xác nhận lại một lần nữa: Bạn sẽ mất sạch dữ liệu và không thể khôi phục nếu không có file backup. Tiếp tục xóa?");
+    if (!confirm2) return;
+
+    setLoading(true);
+    try {
+      await MockBackend.deleteAllData();
+      alert("Đã xóa toàn bộ dữ liệu thành công! Hệ thống sẽ khởi động lại.");
+      window.location.reload();
+    } catch (e) {
+      alert("Lỗi khi xóa dữ liệu. Vui lòng kiểm tra kết nối mạng.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div>
@@ -171,6 +190,24 @@ export const Settings: React.FC = () => {
             >
               {loading ? <Loader2 className="animate-spin" size={18} /> : <Upload size={18} />}
               <span>Khôi Phục Từ File Backup</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Danger Zone */}
+        <div className="bg-white rounded-xl shadow-sm border border-red-100 p-6">
+          <h2 className="text-xl font-bold text-red-600 mb-4">Vùng nguy hiểm</h2>
+          <div className="flex flex-col sm:flex-row items-center gap-4">
+            <div className="flex-1">
+              <p className="text-sm text-gray-600">Hành động này sẽ xóa vĩnh viễn toàn bộ dữ liệu hiện có của cửa hàng trên cả thiết bị này và hệ thống online.</p>
+              <p className="text-xs text-red-500 mt-1 font-medium italic">* Hãy chắc chắn bạn đã sao lưu dữ liệu trước khi thực hiện.</p>
+            </div>
+            <button
+              onClick={handleDeleteAllData}
+              disabled={loading}
+              className="w-full sm:w-auto px-6 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-semibold flex items-center justify-center gap-2"
+            >
+              {loading ? "Đang xóa..." : "Xóa toàn bộ dữ liệu"}
             </button>
           </div>
         </div>

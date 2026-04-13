@@ -3,6 +3,7 @@ import { MockBackend } from '../services/mockBackend';
 import { Product, Category, Order, OrderStatus } from '../types';
 import { Search, Plus, Trash2, Edit2, Archive, Loader2, Image as ImageIcon, Filter, Tags, X, UploadCloud, Eye, PackagePlus } from 'lucide-react';
 import { Modal } from '../components/Modal';
+import { NumberInput } from '../components/NumberInput';
 import { ImportRecord, ExportRecord } from '../types';
 
 export const Inventory: React.FC = () => {
@@ -574,24 +575,21 @@ export const Inventory: React.FC = () => {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Giá Bán (VNĐ)</label>
-              <input 
-                required
-                type="number" 
-                min="0"
+              <NumberInput 
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 value={formData.price}
-                onChange={(e) => setFormData({...formData, price: Number(e.target.value)})}
+                onChange={(val) => setFormData({...formData, price: val})}
+                placeholder="0"
+                suffix="₫"
               />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Số Lượng Tồn</label>
-              <input 
-                required
-                type="number" 
-                min="0"
+              <NumberInput 
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 value={formData.stock}
-                onChange={(e) => setFormData({...formData, stock: Number(e.target.value)})}
+                onChange={(val) => setFormData({...formData, stock: val})}
+                placeholder="0"
               />
             </div>
           </div>
@@ -631,23 +629,21 @@ export const Inventory: React.FC = () => {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Số lượng nhập</label>
-              <input 
-                required
-                type="number" 
-                min="1"
+              <NumberInput 
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 value={importForm.quantity}
-                onChange={(e) => setImportForm({...importForm, quantity: Number(e.target.value)})}
+                onChange={(val) => setImportForm({...importForm, quantity: val})}
+                placeholder="0"
               />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Giá nhập (VNĐ)</label>
-              <input 
-                type="number" 
-                min="0"
+              <NumberInput 
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 value={importForm.unitCost}
-                onChange={(e) => setImportForm({...importForm, unitCost: Number(e.target.value)})}
+                onChange={(val) => setImportForm({...importForm, unitCost: val})}
+                placeholder="0"
+                suffix="₫"
               />
             </div>
           </div>
