@@ -78,10 +78,26 @@ const STORAGE_KEYS = {
   IMPORTS: 'app_imports',
   EXPORTS: 'app_exports',
   PAYMENTS: 'app_payments',
+  AUTH: 'app_auth',
 };
 
 // --- HELPER FUNCTIONS ---
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const sha256 = async (value: string) => {
+  const data = new TextEncoder().encode(value);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+};
+const getAuthConfig = () => {
+  const raw = localStorage.getItem(STORAGE_KEYS.AUTH);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as { username: string; passwordHash: string; updatedAt: string };
+  } catch {
+    localStorage.removeItem(STORAGE_KEYS.AUTH);
+    return null;
+  }
+};
 
 // Wrapper to prevent hanging forever
 const withTimeout = (promise: Promise<any>, ms: number = 8000) => {
@@ -133,6 +149,33 @@ const readPath = async <T>(path: string, ms: number): Promise<T[]> => {
 export const MockBackend = {
   // Check Status
   isOnlineMode: () => !!(isOnline && db),
+  hasAdminAccount: () => !!getAuthConfig(),
+  setupAdminAccount: async (username: string, password: string) => {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername) throw new Error('Vui lòng nhập tài khoản quản trị');
+    if (password.length < 3) throw new Error('Mật khẩu phải có ít nhất 3 ký tự');
+    const passwordHash = await sha256(password);
+    localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify({
+      username: normalizedUsername,
+      passwordHash,
+      updatedAt: new Date().toISOString()
+    }));
+    return { username: normalizedUsername };
+  },
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    const auth = getAuthConfig();
+    if (!auth) throw new Error('Chưa có tài khoản quản trị');
+    const currentHash = await sha256(currentPassword);
+    if (currentHash !== auth.passwordHash) throw new Error('Mật khẩu hiện tại không đúng');
+    if (newPassword.length < 3) throw new Error('Mật khẩu mới phải có ít nhất 3 ký tự');
+    const passwordHash = await sha256(newPassword);
+    localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify({
+      ...auth,
+      passwordHash,
+      updatedAt: new Date().toISOString()
+    }));
+    return true;
+  },
   
   getCustomers: async () => {
     if (MockBackend.isOnlineMode()) {
@@ -806,9 +849,13 @@ export const MockBackend = {
   
   // Auth Simulation
   login: async (username: string, password: string): Promise<User | null> => {
-    await delay(500); 
-    if (username === 'admin' && password === '123456') {
-      const user: User = { username: 'admin', name: 'Chủ Cửa Hàng', role: 'admin' };
+    await delay(500);
+    const auth = getAuthConfig();
+    if (!auth) return null;
+    const normalizedUsername = username.trim();
+    const passwordHash = await sha256(password);
+    if (normalizedUsername === auth.username && passwordHash === auth.passwordHash) {
+      const user: User = { username: auth.username, name: 'Chủ Cửa Hàng', role: 'admin' };
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
       return user;
     }
@@ -821,7 +868,23 @@ export const MockBackend = {
 
   getCurrentUser: (): User | null => {
     const u = localStorage.getItem(STORAGE_KEYS.USER);
-    return u ? JSON.parse(u) : null;
+    if (!u) return null;
+    try {
+      const auth = getAuthConfig();
+      if (!auth) {
+        localStorage.removeItem(STORAGE_KEYS.USER);
+        return null;
+      }
+      const parsed = JSON.parse(u) as User;
+      if (parsed.username === auth.username && parsed.role === 'admin') {
+        return parsed;
+      }
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      return null;
+    } catch {
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      return null;
+    }
   },
 
   exportData: async () => {
@@ -893,18 +956,14 @@ export const MockBackend = {
   },
 
   deleteAllData: async () => {
+    let onlineError: any = null;
     if (MockBackend.isOnlineMode()) {
       try {
-        await withTimeout(set(ref(db, 'products'), null));
-        await withTimeout(set(ref(db, 'orders'), null));
-        await withTimeout(set(ref(db, 'customers'), null));
-        await withTimeout(set(ref(db, 'categories'), null));
-        await withTimeout(set(ref(db, 'imports'), null));
-        await withTimeout(set(ref(db, 'exports'), null));
-        await withTimeout(set(ref(db, 'payments'), null));
+        // Database này dành riêng cho ứng dụng, nên xóa tận gốc để tránh sót payments/công nợ.
+        await withTimeout(set(ref(db), null));
       } catch (e) {
         console.error("Clear Firebase data failed", e);
-        throw e;
+        onlineError = e;
       }
     }
     
@@ -915,6 +974,10 @@ export const MockBackend = {
       }
     });
     
+    if (onlineError) {
+      throw onlineError;
+    }
+
     return true;
   }
 };

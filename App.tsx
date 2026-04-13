@@ -101,7 +101,7 @@ const App: React.FC = () => {
 
       {/* Main Layout */}
       <div className="md:ml-64 min-h-screen flex flex-col transition-all duration-300">
-        <TopBar user={user} onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
+        <TopBar user={user} onMenuClick={() => setSidebarOpen(!sidebarOpen)} onLogout={handleLogout} />
         
         <main className="flex-1 p-4 md:p-8 mt-16 overflow-y-auto">
           <div className="max-w-7xl mx-auto">

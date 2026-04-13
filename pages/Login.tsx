@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { MockBackend } from '../services/mockBackend';
 import { User } from '../types';
 import { ShieldCheck, User as UserIcon, Lock, Loader2, Store } from 'lucide-react';
@@ -8,10 +8,16 @@ interface LoginProps {
 }
 
 export const Login: React.FC<LoginProps> = ({ onLogin }) => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('123456');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [setupMode, setSetupMode] = useState(false);
+
+  useEffect(() => {
+    setSetupMode(!MockBackend.hasAdminAccount());
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,6 +25,17 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setError('');
     
     try {
+      if (setupMode) {
+        if (password !== confirmPassword) {
+          setError('Mật khẩu xác nhận không khớp.');
+          return;
+        }
+        await MockBackend.setupAdminAccount(username, password);
+        setSetupMode(false);
+        setPassword('');
+        setConfirmPassword('');
+        return;
+      }
       const user = await MockBackend.login(username, password);
       if (user) {
         onLogin(user);
@@ -26,7 +43,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
         setError('Thông tin đăng nhập không chính xác.');
       }
     } catch (e) {
-      setError('Đã xảy ra lỗi hệ thống.');
+      setError((e as Error).message || 'Đã xảy ra lỗi hệ thống.');
     } finally {
       setLoading(false);
     }
@@ -40,7 +57,9 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             <Store size={40} />
           </div>
           <h2 className="text-2xl font-bold text-gray-800">Quản Lý Nội Bộ</h2>
-          <p className="text-gray-500 mt-2">Đăng nhập dành riêng cho chủ cửa hàng</p>
+          <p className="text-gray-500 mt-2">
+            {setupMode ? 'Thiết lập tài khoản quản trị lần đầu' : 'Đăng nhập tài khoản quản trị'}
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -52,17 +71,17 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           )}
           
           <div className="space-y-2">
-            <label className="text-sm font-semibold text-gray-700">Tài khoản chủ shop</label>
+            <label className="text-sm font-semibold text-gray-700">Tài khoản quản trị</label>
             <div className="relative">
               <UserIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
               <input 
                 type="text" 
                 className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                placeholder="Nhập tên tài khoản"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
               />
             </div>
+            <p className="text-xs text-gray-400">Tài khoản quản trị được lưu cục bộ trên trình duyệt này.</p>
           </div>
 
           <div className="space-y-2">
@@ -72,12 +91,28 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
               <input 
                 type="password" 
                 className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                placeholder="Nhập mật khẩu"
+                placeholder={setupMode ? 'Tạo mật khẩu quản trị' : 'Nhập mật khẩu quản trị'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
           </div>
+
+          {setupMode && (
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-gray-700">Xác nhận mật khẩu</label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                <input 
+                  type="password" 
+                  className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  placeholder="Nhập lại mật khẩu"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
 
           <button 
             type="submit" 
@@ -85,7 +120,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl flex justify-center items-center gap-2"
           >
             {loading && <Loader2 className="animate-spin" size={20} />}
-            {loading ? 'Đang xác thực...' : 'Truy Cập Hệ Thống'}
+            {loading ? 'Đang xác thực...' : setupMode ? 'Tạo Tài Khoản Quản Trị' : 'Truy Cập Hệ Thống'}
           </button>
         </form>
 

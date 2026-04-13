@@ -6,6 +6,9 @@ import * as XLSX from 'xlsx';
 export const Settings: React.FC = () => {
   const jsonInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
   // --- EXPORT JSON ---
   const handleExport = async () => {
@@ -134,6 +137,26 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== confirmNewPassword) {
+      alert('Mật khẩu xác nhận không khớp.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await MockBackend.changePassword(currentPassword, newPassword);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      alert('Đổi mật khẩu thành công.');
+    } catch (e) {
+      alert((e as Error).message || 'Không thể đổi mật khẩu.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div>
@@ -211,6 +234,47 @@ export const Settings: React.FC = () => {
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div className="flex items-center space-x-3 mb-4">
+          <div className="p-2 bg-amber-100 text-amber-600 rounded-lg">
+            <Save size={24} />
+          </div>
+          <h3 className="text-lg font-bold text-gray-800">Đổi Mật Khẩu Quản Trị</h3>
+        </div>
+        <form onSubmit={handleChangePassword} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <input
+            type="password"
+            placeholder="Mật khẩu hiện tại"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+          />
+          <input
+            type="password"
+            placeholder="Mật khẩu mới"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+          />
+          <input
+            type="password"
+            placeholder="Xác nhận mật khẩu mới"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            value={confirmNewPassword}
+            onChange={(e) => setConfirmNewPassword(e.target.value)}
+          />
+          <div className="md:col-span-3 flex justify-end">
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-5 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-semibold"
+            >
+              {loading ? 'Đang cập nhật...' : 'Cập nhật mật khẩu'}
+            </button>
+          </div>
+        </form>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 opacity-60 mt-6">
