@@ -39,6 +39,10 @@ const App: React.FC = () => {
     setUser(loggedInUser);
   };
 
+  const handleUserUpdated = (updatedUser: User) => {
+    setUser(updatedUser);
+  };
+
   const handleLogout = () => {
     MockBackend.logout();
     setUser(null);
@@ -55,7 +59,7 @@ const App: React.FC = () => {
       case 'customers':
         return <Customers />;
       case 'settings':
-        return <Settings />;
+        return <Settings user={user} onUserUpdated={handleUserUpdated} />;
       case 'debts':
         return <Debts />;
       default:
@@ -101,7 +105,12 @@ const App: React.FC = () => {
 
       {/* Main Layout */}
       <div className="md:ml-64 min-h-screen flex flex-col transition-all duration-300">
-        <TopBar user={user} onMenuClick={() => setSidebarOpen(!sidebarOpen)} onLogout={handleLogout} />
+        <TopBar
+          user={user}
+          onMenuClick={() => setSidebarOpen(!sidebarOpen)}
+          onLogout={handleLogout}
+          onOpenSettings={() => setCurrentPage('settings')}
+        />
         
         <main className="flex-1 p-4 md:p-8 mt-16 overflow-y-auto">
           <div className="max-w-7xl mx-auto">

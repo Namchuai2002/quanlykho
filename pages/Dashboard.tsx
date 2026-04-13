@@ -103,11 +103,19 @@ export const Dashboard: React.FC = () => {
       data.push({
         name: dateStr,
         revenue: dayOrders.reduce((s, o) => s + o.totalAmount, 0),
-        orders: dayOrders.length
+        orders: dayOrders.length,
+        products: dayOrders.reduce((sum, order) => {
+          return sum + order.items.reduce((itemSum, item) => itemSum + item.quantity, 0);
+        }, 0),
+        customers: customers.filter(
+          (c) => new Date(c.createdAt).toLocaleDateString('vi-VN') === d.toLocaleDateString('vi-VN')
+        ).length,
       });
     }
     return data;
   };
+
+  const chartData = getChartData();
 
   const handleGetInsight = async () => {
     setLoadingAi(true);
@@ -217,7 +225,7 @@ export const Dashboard: React.FC = () => {
           </div>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={getChartData()}>
+              <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#2563eb" stopOpacity={0.1}/>
@@ -265,6 +273,66 @@ export const Dashboard: React.FC = () => {
             Xem tất cả báo cáo
             <ChevronRight size={16} />
           </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="font-bold text-gray-800 flex items-center gap-2">
+              <Package size={18} className="text-purple-600" />
+              Biểu đồ sản phẩm
+            </h3>
+          </div>
+          <div className="h-[280px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="colorProducts" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.14}/>
+                    <stop offset="95%" stopColor="#7c3aed" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#64748b'}} />
+                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#64748b'}} />
+                <Tooltip
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  formatter={(value: any) => [value, 'Sản phẩm đã bán']}
+                />
+                <Area type="monotone" dataKey="products" stroke="#7c3aed" strokeWidth={3} fillOpacity={1} fill="url(#colorProducts)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="font-bold text-gray-800 flex items-center gap-2">
+              <Users size={18} className="text-cyan-600" />
+              Biểu đồ khách hàng
+            </h3>
+          </div>
+          <div className="h-[280px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="colorCustomers" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#0891b2" stopOpacity={0.14}/>
+                    <stop offset="95%" stopColor="#0891b2" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#64748b'}} />
+                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#64748b'}} />
+                <Tooltip
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  formatter={(value: any) => [value, 'Khách hàng mới']}
+                />
+                <Area type="monotone" dataKey="customers" stroke="#0891b2" strokeWidth={3} fillOpacity={1} fill="url(#colorCustomers)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </div>
 

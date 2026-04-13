@@ -176,6 +176,15 @@ export const MockBackend = {
     }));
     return true;
   },
+  updateCurrentUserName: async (name: string): Promise<User> => {
+    const trimmedName = name.trim();
+    if (!trimmedName) throw new Error('Tên chủ cửa hàng không được để trống');
+    const current = MockBackend.getCurrentUser();
+    if (!current) throw new Error('Phiên đăng nhập đã hết hạn');
+    const updatedUser: User = { ...current, name: trimmedName };
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updatedUser));
+    return updatedUser;
+  },
   
   getCustomers: async () => {
     if (MockBackend.isOnlineMode()) {

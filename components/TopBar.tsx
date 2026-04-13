@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Menu, User as UserIcon, Bell, Cloud, HardDrive, Wifi, RefreshCw, Check, LogOut } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Menu, User as UserIcon, Bell, Cloud, HardDrive, RefreshCw, Check, LogOut, Settings, ChevronDown } from 'lucide-react';
 import { User } from '../types';
 import { MockBackend } from '../services/mockBackend';
 
@@ -7,15 +7,28 @@ interface TopBarProps {
   user: User | null;
   onMenuClick: () => void;
   onLogout: () => void;
+  onOpenSettings: () => void;
 }
 
-export const TopBar: React.FC<TopBarProps> = ({ user, onMenuClick, onLogout }) => {
+export const TopBar: React.FC<TopBarProps> = ({ user, onMenuClick, onLogout, onOpenSettings }) => {
   const [isOnline, setIsOnline] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setIsOnline(MockBackend.isOnlineMode());
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setProfileMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const handleSync = async () => {
@@ -82,27 +95,50 @@ export const TopBar: React.FC<TopBarProps> = ({ user, onMenuClick, onLogout }) =
       </div>
 
       <div className="flex items-center space-x-4 ml-auto">
-        <button
-          onClick={onLogout}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-          title="Đăng xuất"
-        >
-          <LogOut size={18} />
-          <span className="hidden sm:inline">Đăng xuất</span>
-        </button>
         <div className="relative cursor-pointer text-gray-500 hover:text-blue-600">
           <Bell size={20} />
           <span className="absolute -top-1 -right-1 h-2 w-2 bg-red-500 rounded-full"></span>
         </div>
         
-        <div className="flex items-center space-x-3 border-l pl-4 border-gray-200">
-          <div className="text-right hidden sm:block">
-            <p className="text-sm font-semibold text-gray-800">{user?.name || 'Admin'}</p>
-            <p className="text-xs text-gray-500">Chủ cửa hàng</p>
-          </div>
-          <div className="h-10 w-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
-            <UserIcon size={20} />
-          </div>
+        <div ref={profileMenuRef} className="relative border-l pl-4 border-gray-200">
+          <button
+            onClick={() => setProfileMenuOpen((v) => !v)}
+            className="flex items-center space-x-3 hover:bg-gray-50 rounded-xl px-2 py-1.5 transition-colors"
+          >
+            <div className="text-right hidden sm:block">
+              <p className="text-sm font-semibold text-gray-800">{user?.name || 'Admin'}</p>
+              <p className="text-xs text-gray-500">Chủ cửa hàng</p>
+            </div>
+            <div className="h-10 w-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
+              <UserIcon size={20} />
+            </div>
+            <ChevronDown size={16} className={`text-gray-400 transition-transform ${profileMenuOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {profileMenuOpen && (
+            <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+              <button
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  onOpenSettings();
+                }}
+                className="w-full px-4 py-2.5 text-sm text-left text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                <Settings size={16} />
+                Cài đặt tài khoản
+              </button>
+              <button
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  onLogout();
+                }}
+                className="w-full px-4 py-2.5 text-sm text-left text-red-600 hover:bg-red-50 flex items-center gap-2"
+              >
+                <LogOut size={16} />
+                Đăng xuất
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </header>

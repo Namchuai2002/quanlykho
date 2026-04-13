@@ -1,14 +1,25 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { MockBackend } from '../services/mockBackend';
 import { Download, Upload, Save, Database, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { User } from '../types';
 
-export const Settings: React.FC = () => {
+interface SettingsProps {
+  user: User | null;
+  onUserUpdated: (user: User) => void;
+}
+
+export const Settings: React.FC<SettingsProps> = ({ user, onUserUpdated }) => {
   const jsonInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
+  const [ownerName, setOwnerName] = useState(user?.name || '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+
+  useEffect(() => {
+    setOwnerName(user?.name || '');
+  }, [user?.name]);
 
   // --- EXPORT JSON ---
   const handleExport = async () => {
@@ -157,6 +168,25 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const handleUpdateOwnerName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const nextName = ownerName.trim();
+    if (!nextName) {
+      alert('Vui lòng nhập tên chủ cửa hàng.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const updatedUser = await MockBackend.updateCurrentUserName(nextName);
+      onUserUpdated(updatedUser);
+      alert('Đã cập nhật tên chủ cửa hàng.');
+    } catch (e) {
+      alert((e as Error).message || 'Không thể cập nhật tên.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div>
@@ -165,6 +195,45 @@ export const Settings: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <div className="flex items-center space-x-3 mb-4">
+            <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
+              <Save size={24} />
+            </div>
+            <h3 className="text-lg font-bold text-gray-800">Thông Tin Chủ Cửa Hàng</h3>
+          </div>
+          <form onSubmit={handleUpdateOwnerName} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-gray-700">Tài khoản đăng nhập</label>
+              <input
+                type="text"
+                value={user?.username || ''}
+                disabled
+                className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700">Tên hiển thị chủ cửa hàng</label>
+              <input
+                type="text"
+                value={ownerName}
+                onChange={(e) => setOwnerName(e.target.value)}
+                placeholder="Nhập tên chủ cửa hàng"
+                className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={loading}
+                className="px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+              >
+                {loading ? 'Đang lưu...' : 'Lưu tên chủ cửa hàng'}
+              </button>
+            </div>
+          </form>
+        </div>
+
         {/* JSON BACKUP CARD */}
         <div className="bg-white rounded-xl shadow-sm border border-blue-200 p-6 relative overflow-hidden">
           <div className="absolute top-0 right-0 p-4 opacity-10">
