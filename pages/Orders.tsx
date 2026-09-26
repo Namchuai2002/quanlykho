@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { MockBackend } from '../services/mockBackend';
 import { Order, OrderStatus, Product, CartItem, Customer } from '../types';
-import { Search, Plus, Eye, CheckCircle, Truck, XCircle, Clock, Loader2, Edit2, Trash2 } from 'lucide-react';
+import { Search, Plus, Eye, CheckCircle, Truck, XCircle, Clock, Loader2, Edit2, Trash2, Printer } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { NumberInput } from '../components/NumberInput';
 
@@ -109,6 +109,276 @@ export const Orders: React.FC = () => {
       setOrders(prev => prev.filter(o => o.id !== orderId));
       await loadData();
     }
+  };
+
+  const escapeHtml = (value: string) =>
+    String(value ?? '').replace(/[&<>"']/g, (ch) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch
+    ));
+
+  const formatMoney = (value: number) =>
+    Math.round(value).toLocaleString('vi-VN');
+
+  const numberToVietnamese = (value: number) => {
+    const chuSo = ['không', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín'];
+    const hang = ['', 'nghìn', 'triệu', 'tỷ', 'nghìn tỷ', 'triệu tỷ'];
+    const n = Math.round(Math.abs(value));
+    if (n === 0) return 'Không đồng';
+
+    const readBlock = (block: number, full: boolean) => {
+      const tram = Math.floor(block / 100);
+      const chuc = Math.floor((block % 100) / 10);
+      const donvi = block % 10;
+      let text = '';
+      if (tram > 0) {
+        text += `${chuSo[tram]} trăm`;
+        if (chuc === 0 && donvi > 0) text += ' lẻ';
+      } else if (full && (chuc > 0 || donvi > 0)) {
+        text += 'không trăm';
+        if (chuc === 0) text += ' lẻ';
+      }
+      if (chuc > 1) {
+        text += `${text ? ' ' : ''}${chuSo[chuc]} mươi`;
+        if (donvi === 1) text += ' mốt';
+        else if (donvi === 4) text += ' tư';
+        else if (donvi === 5) text += ' lăm';
+        else if (donvi > 0) text += ` ${chuSo[donvi]}`;
+      } else if (chuc === 1) {
+        text += `${text ? ' ' : ''}mười`;
+        if (donvi === 5) text += ' lăm';
+        else if (donvi > 0) text += ` ${chuSo[donvi]}`;
+      } else if (donvi > 0) {
+        text += `${text ? ' ' : ''}${chuSo[donvi]}`;
+      }
+      return text.trim();
+    };
+
+    const blocks: number[] = [];
+    let remaining = n;
+    while (remaining > 0) {
+      blocks.push(remaining % 1000);
+      remaining = Math.floor(remaining / 1000);
+    }
+
+    const parts: string[] = [];
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i];
+      if (block === 0) continue;
+      const full = i !== blocks.length - 1;
+      const blockText = readBlock(block, full);
+      if (blockText) parts.push(`${blockText}${hang[i] ? ` ${hang[i]}` : ''}`);
+    }
+
+    const words = parts.join(' ').replace(/\s+/g, ' ').trim();
+    return `${words.charAt(0).toUpperCase()}${words.slice(1)} đồng`;
+  };
+
+  const printInvoice = (order: Order) => {
+    const created = new Date(order.createdAt);
+    const day = String(created.getDate()).padStart(2, '0');
+    const month = String(created.getMonth() + 1).padStart(2, '0');
+    const year = String(created.getFullYear());
+    const goodsTotal = order.items.reduce((sum, it) => sum + it.price * it.quantity, 0);
+    const vatAmount = 0;
+    const paymentTotal = goodsTotal + vatAmount;
+    const ROW_COUNT = Math.max(10, order.items.length);
+
+    const itemRows = Array.from({ length: ROW_COUNT }, (_, idx) => {
+      const it = order.items[idx];
+      if (!it) {
+        return `
+          <tr>
+            <td class="c">${idx + 1}</td>
+            <td></td>
+            <td></td>
+            <td class="c"></td>
+            <td class="c"></td>
+            <td class="r"></td>
+            <td class="r"></td>
+            <td class="c"></td>
+            <td class="r"></td>
+          </tr>
+        `;
+      }
+      const product = products.find(p => p.id === it.productId);
+      const lineTotal = it.price * it.quantity;
+      return `
+        <tr>
+          <td class="c">${idx + 1}</td>
+          <td>${escapeHtml(product?.sku || '')}</td>
+          <td>${escapeHtml(it.name)}</td>
+          <td class="c"></td>
+          <td class="c">${it.quantity}</td>
+          <td class="r">${formatMoney(it.price)}</td>
+          <td class="r">${formatMoney(lineTotal)}</td>
+          <td class="c"></td>
+          <td class="r"></td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+      <html lang="vi">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Phiếu xuất kho ${escapeHtml(order.id)}</title>
+        <style>
+          @page { size: A4; margin: 10mm; }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            color: #111;
+            font-family: "Times New Roman", Times, serif;
+            background: #fff;
+          }
+          .sheet {
+            border: 1.5px solid #111;
+            padding: 14px 16px 18px;
+            min-height: 250mm;
+          }
+          .company { text-align: center; line-height: 1.35; }
+          .company .name { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2px; }
+          .company .tag { font-size: 12.5px; font-weight: 700; text-transform: uppercase; margin-top: 2px; }
+          .company .addr { font-size: 12px; margin-top: 2px; }
+          hr.line { border: 0; border-top: 1.5px solid #111; margin: 10px 0 12px; }
+          .doc-title { text-align: center; font-size: 22px; font-weight: 700; letter-spacing: 0.6px; margin: 0; }
+          .doc-date { text-align: center; font-size: 13px; margin: 4px 0 14px; }
+          .info { font-size: 13.5px; line-height: 1.7; margin-bottom: 10px; }
+          table.grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+          table.grid th, table.grid td {
+            border: 1px solid #111;
+            padding: 5px 4px;
+            font-size: 12px;
+            height: 26px;
+            vertical-align: middle;
+          }
+          table.grid th { font-weight: 700; text-align: center; }
+          .c { text-align: center; }
+          .r { text-align: right; }
+          .sum-label { text-align: right; font-weight: 700; padding-right: 8px; }
+          .words { font-size: 13.5px; margin: 12px 0 6px; line-height: 1.6; }
+          .signs { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; margin-top: 22px; text-align: center; }
+          .signs .role { font-size: 13.5px; font-weight: 700; }
+          .signs .hint { font-size: 12px; font-style: italic; margin-top: 2px; }
+          @media print {
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .sheet { border-color: #000; min-height: auto; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="sheet">
+          <div class="company">
+            <div class="name">CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ XỔ VIỆT</div>
+            <div class="tag">CHUYÊN BÁN BUÔN - BÁN LẺ HÀNG THỰC PHẨM - MỸ PHẨM NGA - RUS</div>
+            <div class="addr">Số 11, ngách 15, ngõ 158 Nguyễn Sơn, P. Bồ Đề, Q. Long Biên, Hà Nội - ĐT: 0983272285</div>
+          </div>
+          <hr class="line" />
+          <h1 class="doc-title">PHIẾU XUẤT KHO BÁN HÀNG</h1>
+          <div class="doc-date">Ngày ${day} tháng ${month} năm ${year}</div>
+          <div class="info">
+            <div>Tên khách hàng: ${escapeHtml(order.customerName || '')}</div>
+            <div>Điện thoại: ${escapeHtml(order.customerPhone || '')}</div>
+            <div>Địa chỉ: ${escapeHtml(order.address || '')}</div>
+          </div>
+          <table class="grid">
+            <colgroup>
+              <col style="width:6%" />
+              <col style="width:12%" />
+              <col style="width:24%" />
+              <col style="width:7%" />
+              <col style="width:7%" />
+              <col style="width:12%" />
+              <col style="width:13%" />
+              <col style="width:8%" />
+              <col style="width:11%" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>STT</th>
+                <th>Mã hàng</th>
+                <th>Tên hàng</th>
+                <th>ĐVT</th>
+                <th>SL</th>
+                <th>Đơn giá</th>
+                <th>Thành tiền</th>
+                <th>%CK</th>
+                <th>Tiền CK</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemRows}
+              <tr>
+                <td colspan="8" class="sum-label">Tổng tiền hàng:</td>
+                <td class="r">${formatMoney(goodsTotal)}</td>
+              </tr>
+              <tr>
+                <td colspan="8" class="sum-label">Tiền thuế GTGT:</td>
+                <td class="r">${formatMoney(vatAmount)}</td>
+              </tr>
+              <tr>
+                <td colspan="8" class="sum-label">Tổng tiền thanh toán:</td>
+                <td class="r">${formatMoney(paymentTotal)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="words">
+            Số tiền viết bằng chữ: ${escapeHtml(numberToVietnamese(paymentTotal))}
+          </div>
+          <div class="signs">
+            <div>
+              <div class="role">Người mua hàng</div>
+              <div class="hint">(Ký, họ tên)</div>
+            </div>
+            <div>
+              <div class="role">Người giao hàng</div>
+              <div class="hint">(Ký, họ tên)</div>
+            </div>
+            <div>
+              <div class="role">Thủ quỹ</div>
+              <div class="hint">(Ký, họ tên)</div>
+            </div>
+            <div>
+              <div class="role">Kế toán</div>
+              <div class="hint">(Ký, họ tên)</div>
+            </div>
+          </div>
+        </div>
+      </body>
+      </html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document;
+    if (!doc) {
+      document.body.removeChild(iframe);
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    let printed = false;
+    const triggerPrint = () => {
+      if (printed) return;
+      printed = true;
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(() => {
+        if (iframe.parentNode) document.body.removeChild(iframe);
+      }, 800);
+    };
+
+    iframe.onload = triggerPrint;
+    setTimeout(triggerPrint, 250);
   };
 
   // --- Cart Logic ---
@@ -270,9 +540,17 @@ export const Orders: React.FC = () => {
                     <td className="px-6 py-4 text-right">
                       <button 
                         className="p-1.5 text-gray-700 hover:bg-gray-50 rounded-md mr-2"
+                        title="Xem chi tiết"
                         onClick={() => { setDetailOrder(order); setIsDetailOpen(true); }}
                       >
                         <Eye size={16} />
+                      </button>
+                      <button
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md mr-2"
+                        title="In hóa đơn"
+                        onClick={() => printInvoice(order)}
+                      >
+                        <Printer size={16} />
                       </button>
                       <button
                         className="p-1.5 text-red-600 hover:bg-red-50 rounded-md mr-2"
@@ -576,6 +854,16 @@ export const Orders: React.FC = () => {
               <div className="text-right font-bold text-blue-600 mt-2">
                 Tổng: {detailOrder.totalAmount.toLocaleString()} ₫
               </div>
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => printInvoice(detailOrder)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm font-medium flex items-center gap-2"
+              >
+                <Printer size={16} />
+                In hóa đơn
+              </button>
             </div>
           </div>
         )}
