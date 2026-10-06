@@ -81,6 +81,18 @@ const STORAGE_KEYS = {
   AUTH: 'app_auth',
 };
 
+export interface AdminAuthConfig {
+  username: string;
+  passwordHash: string;
+  updatedAt: string;
+}
+
+export interface SessionUser extends User {
+  _authUpdatedAt: string;
+}
+
+const FIREBASE_AUTH_PATH = '_auth/admin';
+
 // --- HELPER FUNCTIONS ---
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const sha256 = async (value: string) => {
@@ -88,14 +100,64 @@ const sha256 = async (value: string) => {
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 };
-const getAuthConfig = () => {
+
+const getAuthConfigLocal = (): AdminAuthConfig | null => {
   const raw = localStorage.getItem(STORAGE_KEYS.AUTH);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as { username: string; passwordHash: string; updatedAt: string };
+    return JSON.parse(raw) as AdminAuthConfig;
   } catch {
     localStorage.removeItem(STORAGE_KEYS.AUTH);
     return null;
+  }
+};
+
+const setAuthConfigLocal = (cfg: AdminAuthConfig) => {
+  localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify(cfg));
+};
+
+const readSingleValue = async <T>(path: string, ms: number): Promise<T | null> => {
+  try {
+    const snapshot = await withTimeoutRetry(() => get(child(ref(db), path)), ms, 2);
+    if (snapshot && (snapshot as any).exists && (snapshot as any).exists()) {
+      return (snapshot as any).val() as T;
+    }
+    return null;
+  } catch {
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), ms);
+      const res = await fetch(`${sanitizeUrl(firebaseConfig.databaseURL)}/${path}.json`, { signal: controller.signal });
+      clearTimeout(t);
+      if (res.ok) {
+        const json = await res.json();
+        return json as T | null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+};
+
+const getAuthConfigFirebase = async (): Promise<AdminAuthConfig | null> => {
+  if (!MockBackend.isOnlineMode()) return getAuthConfigLocal();
+  try {
+    const fbCfg = await readSingleValue<AdminAuthConfig>(FIREBASE_AUTH_PATH, 12000);
+    if (fbCfg && fbCfg.username && fbCfg.passwordHash) {
+      setAuthConfigLocal(fbCfg);
+      return fbCfg;
+    }
+    const local = getAuthConfigLocal();
+    // Migrate: nếu có auth cũ ở local mà Firebase chưa có → đẩy lên Firebase
+    if (local) {
+      try {
+        await withTimeout(set(ref(db, FIREBASE_AUTH_PATH), local));
+      } catch {}
+    }
+    return local;
+  } catch {
+    return getAuthConfigLocal();
   }
 };
 
@@ -149,31 +211,61 @@ const readPath = async <T>(path: string, ms: number): Promise<T[]> => {
 export const MockBackend = {
   // Check Status
   isOnlineMode: () => !!(isOnline && db),
-  hasAdminAccount: () => !!getAuthConfig(),
+  hasAdminAccount: () => !!getAuthConfigLocal(),
+  hasAdminAccountAsync: async () => {
+    const cfg = await getAuthConfigFirebase();
+    return !!cfg;
+  },
+  refreshAuthCache: async () => {
+    try {
+      await getAuthConfigFirebase();
+    } catch {}
+  },
   setupAdminAccount: async (username: string, password: string) => {
     const normalizedUsername = username.trim();
     if (!normalizedUsername) throw new Error('Vui lòng nhập tài khoản quản trị');
     if (password.length < 3) throw new Error('Mật khẩu phải có ít nhất 3 ký tự');
     const passwordHash = await sha256(password);
-    localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify({
-      username: normalizedUsername,
-      passwordHash,
-      updatedAt: new Date().toISOString()
-    }));
+    const updatedAt = new Date().toISOString();
+    const cfg: AdminAuthConfig = { username: normalizedUsername, passwordHash, updatedAt };
+
+    if (MockBackend.isOnlineMode()) {
+      try {
+        await withTimeout(set(ref(db, FIREBASE_AUTH_PATH), cfg));
+      } catch (e) {
+        // Fallback to local-only nếu Firebase lỗi
+      }
+    }
+    setAuthConfigLocal(cfg);
     return { username: normalizedUsername };
   },
   changePassword: async (currentPassword: string, newPassword: string) => {
-    const auth = getAuthConfig();
+    const auth = await getAuthConfigFirebase();
     if (!auth) throw new Error('Chưa có tài khoản quản trị');
     const currentHash = await sha256(currentPassword);
     if (currentHash !== auth.passwordHash) throw new Error('Mật khẩu hiện tại không đúng');
     if (newPassword.length < 3) throw new Error('Mật khẩu mới phải có ít nhất 3 ký tự');
     const passwordHash = await sha256(newPassword);
-    localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify({
-      ...auth,
-      passwordHash,
-      updatedAt: new Date().toISOString()
-    }));
+    const updatedAt = new Date().toISOString();
+    const next: AdminAuthConfig = { ...auth, passwordHash, updatedAt };
+
+    if (MockBackend.isOnlineMode()) {
+      try {
+        await withTimeout(set(ref(db, FIREBASE_AUTH_PATH), next));
+      } catch (e) {
+        throw new Error('Không thể cập nhật mật khẩu lên hệ thống online, kiểm tra kết nối.');
+      }
+    }
+    setAuthConfigLocal(next);
+    // Cập nhật session user hiện tại với authUpdatedAt mới để máy này không bị validateSession tự logout
+    const rawUser = localStorage.getItem(STORAGE_KEYS.USER);
+    if (rawUser) {
+      try {
+        const session = JSON.parse(rawUser) as SessionUser;
+        const nextUser: SessionUser = { ...session, _authUpdatedAt: updatedAt };
+        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(nextUser));
+      } catch {}
+    }
     return true;
   },
   updateCurrentUserName: async (name: string): Promise<User> => {
@@ -181,9 +273,52 @@ export const MockBackend = {
     if (!trimmedName) throw new Error('Tên chủ cửa hàng không được để trống');
     const current = MockBackend.getCurrentUser();
     if (!current) throw new Error('Phiên đăng nhập đã hết hạn');
-    const updatedUser: User = { ...current, name: trimmedName };
+    const updatedUser: SessionUser = { ...(current as SessionUser), name: trimmedName };
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updatedUser));
-    return updatedUser;
+    return { username: updatedUser.username, name: updatedUser.name, role: updatedUser.role };
+  },
+  validateSession: async (): Promise<{ valid: boolean; user: User | null }> => {
+    const rawUser = localStorage.getItem(STORAGE_KEYS.USER);
+    if (!rawUser) {
+      return { valid: false, user: null };
+    }
+    let session: SessionUser | null = null;
+    try {
+      session = JSON.parse(rawUser) as SessionUser;
+    } catch {
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      return { valid: false, user: null };
+    }
+
+    const authCfg = await getAuthConfigFirebase();
+    if (!authCfg) {
+      // Không có tài khoản admin nào tồn tại → logout
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      return { valid: false, user: null };
+    }
+
+    // Kiểm tra username & role
+    if (session.username !== authCfg.username || session.role !== 'admin') {
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      return { valid: false, user: null };
+    }
+
+    // Kiểm tra phiên có cùng updatedAt với server auth không
+    const sessionStamp = (session as any)._authUpdatedAt;
+    if (sessionStamp && sessionStamp !== authCfg.updatedAt) {
+      // Mật khẩu/tài khoản đã được đổi ở nơi khác (thời gian cập nhật khác) → logout
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      return { valid: false, user: null };
+    }
+
+    // Stamp cũ (chưa có, phiên cũ): refresh stamp cho phiên này nếu không có, coi là hợp lệ nếu user trùng
+    if (!sessionStamp) {
+      const refreshed: SessionUser = { ...session, _authUpdatedAt: authCfg.updatedAt };
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(refreshed));
+      return { valid: true, user: { username: refreshed.username, name: refreshed.name, role: refreshed.role } };
+    }
+
+    return { valid: true, user: { username: session.username, name: session.name, role: session.role } };
   },
   
   getCustomers: async () => {
@@ -924,15 +1059,30 @@ export const MockBackend = {
   
   // Auth Simulation
   login: async (username: string, password: string): Promise<User | null> => {
-    await delay(500);
-    const auth = getAuthConfig();
+    await delay(300);
+    const auth = await getAuthConfigFirebase();
     if (!auth) return null;
     const normalizedUsername = username.trim();
     const passwordHash = await sha256(password);
     if (normalizedUsername === auth.username && passwordHash === auth.passwordHash) {
-      const user: User = { username: auth.username, name: 'Chủ Cửa Hàng', role: 'admin' };
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-      return user;
+      const baseUser: SessionUser = {
+        username: auth.username,
+        name: 'Chủ Cửa Hàng',
+        role: 'admin',
+        _authUpdatedAt: auth.updatedAt,
+      };
+      // Giữ lại name cũ nếu user đã từng đổi tên chủ cửa hàng (nếu có phiên cũ)
+      const rawOld = localStorage.getItem(STORAGE_KEYS.USER);
+      if (rawOld) {
+        try {
+          const old = JSON.parse(rawOld) as any;
+          if (old.name && typeof old.name === 'string') {
+            baseUser.name = old.name;
+          }
+        } catch {}
+      }
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(baseUser));
+      return { username: baseUser.username, name: baseUser.name, role: baseUser.role };
     }
     return null;
   },
@@ -945,17 +1095,19 @@ export const MockBackend = {
     const u = localStorage.getItem(STORAGE_KEYS.USER);
     if (!u) return null;
     try {
-      const auth = getAuthConfig();
-      if (!auth) {
+      const auth = getAuthConfigLocal();
+      const parsed = JSON.parse(u) as User;
+      if (parsed.role !== 'admin') {
         localStorage.removeItem(STORAGE_KEYS.USER);
         return null;
       }
-      const parsed = JSON.parse(u) as User;
-      if (parsed.username === auth.username && parsed.role === 'admin') {
-        return parsed;
+      // Nếu có cached auth local thì check username; nếu chưa (ví dụ offline + lần đầu sau clear storage)
+      // thì trả về parsed nếu username hợp lệ (phần validate chính thức sẽ qua validateSession async)
+      if (auth && parsed.username !== auth.username) {
+        localStorage.removeItem(STORAGE_KEYS.USER);
+        return null;
       }
-      localStorage.removeItem(STORAGE_KEYS.USER);
-      return null;
+      return { username: parsed.username, name: parsed.name, role: parsed.role };
     } catch {
       localStorage.removeItem(STORAGE_KEYS.USER);
       return null;
@@ -1034,7 +1186,7 @@ export const MockBackend = {
     let onlineError: any = null;
     if (MockBackend.isOnlineMode()) {
       try {
-        // Database này dành riêng cho ứng dụng, nên xóa tận gốc để tránh sót payments/công nợ.
+        // Database này dành riêng cho ứng dụng, nên xóa tận gốc để tránh sót payments/công nợ (bao gồm cả _auth)
         await withTimeout(set(ref(db), null));
       } catch (e) {
         console.error("Clear Firebase data failed", e);
@@ -1042,11 +1194,9 @@ export const MockBackend = {
       }
     }
     
-    // Luôn xóa sạch LocalStorage liên quan đến app
+    // Xóa sạch toàn bộ LocalStorage liên quan đến app (bao gồm cả tài khoản và phiên đăng nhập)
     Object.values(STORAGE_KEYS).forEach(key => {
-      if (key !== STORAGE_KEYS.USER) { // Giữ lại phiên đăng nhập nếu muốn, hoặc xóa hết
-        localStorage.removeItem(key);
-      }
+      localStorage.removeItem(key);
     });
     
     if (onlineError) {

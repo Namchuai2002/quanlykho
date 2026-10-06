@@ -18,21 +18,88 @@ const App: React.FC = () => {
     return localStorage.getItem('current_page') || 'dashboard';
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [bootReady, setBootReady] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('current_page', currentPage);
   }, [currentPage]);
 
   useEffect(() => {
-    // Check for persisted session
-    const currentUser = MockBackend.getCurrentUser();
-    if (currentUser) {
-      setUser(currentUser);
-      // Auto-sync data if online
-      if (MockBackend.isOnlineMode()) {
-        MockBackend.syncLocalDataToFirebase().catch(console.error);
+    let cancelled = false;
+    let intervalTimer: any = null;
+
+    const bootAuth = async () => {
+      // 1. Sync auth config (tài khoản admin) từ Firebase về trước, bao gồm cả migration nếu có
+      try {
+        await MockBackend.refreshAuthCache();
+      } catch {}
+
+      // 2. Đọc user từ local cache và set optimistic (tránh flash màn hình login)
+      const currentUser = MockBackend.getCurrentUser();
+      if (currentUser) setUser(currentUser);
+
+      if (currentUser) {
+        // 3. Kiểm tra phiên so với server (tránh trường hợp đổi mật khẩu nơi khác)
+        try {
+          const result = await MockBackend.validateSession();
+          if (cancelled) return;
+          if (result.valid && result.user) {
+            setUser(result.user);
+            if (MockBackend.isOnlineMode()) {
+              MockBackend.syncLocalDataToFirebase().catch(console.error);
+            }
+          } else {
+            // Phiên không hợp lệ (đổi mật khẩu nơi khác) → force logout
+            MockBackend.logout();
+            setUser(null);
+          }
+        } catch {
+          // Check lỗi mạng → giữ phiên local (tốt nhất có thể)
+        }
       }
-    }
+
+      if (!cancelled) setBootReady(true);
+    };
+
+    bootAuth();
+
+    // --- Định kỳ kiểm tra lại session (đổi mật khẩu nơi khác sẽ logout) ---
+    intervalTimer = setInterval(async () => {
+      if (!MockBackend.getCurrentUser()) return;
+      try {
+        const r = await MockBackend.validateSession();
+        if (!r.valid) {
+          MockBackend.logout();
+          setUser(null);
+        } else if (r.user) {
+          // Update user state nếu có thay đổi tên (tránh re-render thừa nếu giống)
+          setUser((prev) => {
+            if (!prev) return r.user;
+            if (prev.name === r.user.name && prev.username === r.user.username) return prev;
+            return r.user;
+          });
+        }
+      } catch {}
+    }, 30 * 1000);
+
+    // --- Kiểm tra lại khi cửa sổ được focus trở lại (chuyển tab / máy khác quay lại) ---
+    const onFocus = async () => {
+      if (!MockBackend.getCurrentUser()) return;
+      try {
+        const r = await MockBackend.validateSession();
+        if (!r.valid) {
+          MockBackend.logout();
+          setUser(null);
+        }
+      } catch {}
+    };
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cancelled = true;
+      if (intervalTimer) clearInterval(intervalTimer);
+      window.removeEventListener('focus', onFocus);
+    };
   }, []);
 
   const handleLogin = (loggedInUser: User) => {
