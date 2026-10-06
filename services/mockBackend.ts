@@ -364,6 +364,8 @@ export const MockBackend = {
     const product = products.find(p => p.id === productId);
     if (!product) throw new Error('Sản phẩm không tồn tại');
     const id = `IMP${Date.now().toString().slice(-8)}`;
+    const now = new Date().toISOString();
+    const totalCost = unitCost ? unitCost * quantity : undefined;
     const record: ImportRecord = {
       id,
       productId,
@@ -371,16 +373,18 @@ export const MockBackend = {
       name: product.name,
       quantity,
       unitCost,
-      totalCost: unitCost ? unitCost * quantity : undefined,
-      createdAt: new Date().toISOString(),
+      totalCost,
+      createdAt: now,
       note,
-      supplierName: supplierName || note
+      supplierName: supplierName || note,
+      paidAmount: paidNow && unitCost ? totalCost : 0,
+      lastPaidAt: paidNow && unitCost ? now : undefined,
     };
 
     const offlineWrite = async () => {
       const list = await MockBackend.getImports();
       localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify([record, ...list]));
-      const newProducts = products.map(p => p.id === product.id ? { ...p, stock: (p.stock || 0) + quantity, importDate: new Date().toISOString() } : p);
+      const newProducts = products.map(p => p.id === product.id ? { ...p, stock: (p.stock || 0) + quantity, importDate: now } : p);
       localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(newProducts));
     };
 
@@ -389,22 +393,22 @@ export const MockBackend = {
         const updates: any = {};
         updates['imports/' + id] = record;
         updates['products/' + product.id + '/stock'] = (product.stock || 0) + quantity;
-        updates['products/' + product.id + '/importDate'] = new Date().toISOString();
-        await withTimeout(update(ref(db), updates));
-        if (paidNow && unitCost) {
+        updates['products/' + product.id + '/importDate'] = now;
+        if (paidNow && unitCost && totalCost) {
           const paymentId = `PAY${Date.now().toString().slice(-8)}`;
           const pay: PaymentRecord = {
             id: paymentId,
             kind: 'payable',
             importId: id,
-            amount: unitCost * quantity,
+            amount: totalCost,
             method: 'bank',
-            createdAt: new Date().toISOString(),
+            createdAt: now,
             note,
             supplierName: record.supplierName
           };
-          await withTimeout(set(ref(db, 'payments/' + paymentId), pay));
+          updates['payments/' + paymentId] = pay;
         }
+        await withTimeout(update(ref(db), updates));
       } catch (e) {
         try {
           await offlineWrite();
@@ -414,16 +418,16 @@ export const MockBackend = {
       }
     } else {
       await offlineWrite();
-      if (paidNow && unitCost) {
+      if (paidNow && unitCost && totalCost) {
         const payments = await MockBackend.getPayments();
         const paymentId = `PAY${Date.now().toString().slice(-8)}`;
         const pay: PaymentRecord = {
           id: paymentId,
           kind: 'payable',
           importId: id,
-          amount: unitCost * quantity,
+          amount: totalCost,
           method: 'bank',
-          createdAt: new Date().toISOString(),
+          createdAt: now,
           note,
           supplierName: record.supplierName
         };
@@ -509,29 +513,68 @@ export const MockBackend = {
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new Error('Số tiền thanh toán phải > 0');
     }
-    const imports = await MockBackend.getImports();
-    const imp = imports.find(i => i.id === importId);
-    if (!imp || typeof imp.totalCost !== 'number') throw new Error('Phiếu nhập không hợp lệ');
-    const existingPayments = await MockBackend.getPayments();
-    const paidSum = existingPayments
-      .filter(p => p.kind === 'payable' && p.importId === importId)
-      .reduce((s, p) => s + p.amount, 0);
-    if (paidSum + amount > imp.totalCost) {
-      throw new Error('Số tiền thanh toán vượt quá tổng phải trả');
-    }
-    const payment: PaymentRecord = { id, kind: 'payable', importId, amount, method, createdAt: now, note, supplierName: imp.supplierName || imp.note };
+
+    const doWriteWith = async (ctx: { imp: ImportRecord; existingPayments: PaymentRecord[] }) => {
+      const { imp, existingPayments } = ctx;
+      if (!imp || typeof imp.totalCost !== 'number') throw new Error('Phiếu nhập không hợp lệ');
+      const paidFromRecords = existingPayments
+        .filter(p => p.kind === 'payable' && p.importId === importId)
+        .reduce((s, p) => s + p.amount, 0);
+      const paidBase = Math.max(paidFromRecords, imp.paidAmount || 0);
+      if (paidBase + amount > (imp.totalCost as number)) {
+        throw new Error('Số tiền thanh toán vượt quá tổng phải trả');
+      }
+      const paid = paidBase + amount;
+      const payment: PaymentRecord = { id, kind: 'payable', importId, amount, method, createdAt: now, note, supplierName: imp.supplierName || imp.note };
+      return { payment, paid };
+    };
+
+    // --- ONLINE (FIREBASE) PATH ---
     if (MockBackend.isOnlineMode()) {
       try {
+        const impSnap = await withTimeout(get(ref(db, `imports/${importId}`)));
+        if (!impSnap || !(impSnap as any).exists || !(impSnap as any).exists()) {
+          throw new Error('Phiếu nhập không tồn tại');
+        }
+        const imp = (impSnap as any).val() as ImportRecord;
+        const existingPayments = await MockBackend.getPayments();
+        const { payment, paid } = await doWriteWith({ imp, existingPayments });
+
         const updates: any = {};
         updates[`payments/${id}`] = payment;
+        updates[`imports/${importId}/paidAmount`] = paid;
+        updates[`imports/${importId}/lastPaidAt`] = now;
         await withTimeout(update(ref(db), updates));
+
+        // Đồng bộ local storage
+        const localImports = await MockBackend.getImports();
+        localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(localImports.map(i => i.id === importId ? { ...i, paidAmount: paid, lastPaidAt: now } : i)));
+        const localPayments = await MockBackend.getPayments();
+        localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...localPayments.filter(p => p.id !== id)]));
+        return payment;
       } catch (e) {
-        localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...existingPayments]));
+        // Fallback offline nếu Firebase lỗi
       }
-    } else {
-      localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...existingPayments]));
     }
+
+    // --- OFFLINE (LOCALSTORAGE) PATH ---
+    const imports = await MockBackend.getImports();
+    const imp = imports.find(i => i.id === importId);
+    if (!imp) throw new Error('Phiếu nhập không tồn tại');
+    const existingPayments = await MockBackend.getPayments();
+    const { payment, paid } = await doWriteWith({ imp, existingPayments });
+    localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(imports.map(i => i.id === importId ? { ...i, paidAmount: paid, lastPaidAt: now } : i)));
+    localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...existingPayments.filter(p => p.id !== id)]));
     return payment;
+  },
+
+  getDebtBundle: async () => {
+    const [orders, imports, payments] = await Promise.all([
+      MockBackend.getOrders(),
+      MockBackend.getImports(),
+      MockBackend.getPayments(),
+    ]);
+    return { orders, imports, payments };
   },
 
   addProduct: async (product: Omit<Product, 'id' | 'importDate'>) => {
@@ -603,7 +646,7 @@ export const MockBackend = {
     if (!MockBackend.isOnlineMode()) return;
     
     try {
-      const results = { orders: 0, payments: 0 };
+      const results = { orders: 0, imports: 0, payments: 0 };
       
       // 1. Sync Payments
       const localPayments = JSON.parse(localStorage.getItem(STORAGE_KEYS.PAYMENTS) || '[]');
@@ -639,6 +682,29 @@ export const MockBackend = {
       if (Object.keys(orderUpdates).length > 0) {
         await withTimeout(update(ref(db), orderUpdates));
         results.orders = Object.keys(orderUpdates).length;
+      }
+
+      // 3. Sync Import paidAmount
+      const localImports = JSON.parse(localStorage.getItem(STORAGE_KEYS.IMPORTS) || '[]');
+      const firebaseImports = await readPath<ImportRecord>('imports', 12000);
+      const fbImportMap = new Map(firebaseImports.map(i => [i.id, i]));
+      
+      const importUpdates: any = {};
+      localImports.forEach((li: ImportRecord) => {
+        const fi = fbImportMap.get(li.id);
+        if (fi) {
+          const lPaid = li.paidAmount || 0;
+          const fPaid = fi.paidAmount || 0;
+          if (lPaid > fPaid) {
+            importUpdates[`imports/${li.id}/paidAmount`] = lPaid;
+            if (li.lastPaidAt) importUpdates[`imports/${li.id}/lastPaidAt`] = li.lastPaidAt;
+          }
+        }
+      });
+      
+      if (Object.keys(importUpdates).length > 0) {
+        await withTimeout(update(ref(db), importUpdates));
+        results.imports = Object.keys(importUpdates).length;
       }
       
       console.log("Đồng bộ dữ liệu thành công:", results);

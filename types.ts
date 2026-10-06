@@ -76,6 +76,8 @@ export interface ImportRecord {
   createdAt: string;
   note?: string;
   supplierName?: string;
+  paidAmount?: number;
+  lastPaidAt?: string;
 }
 
 export interface ExportRecord {
