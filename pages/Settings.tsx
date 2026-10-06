@@ -16,6 +16,7 @@ export const Settings: React.FC<SettingsProps> = ({ user, onUserUpdated }) => {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [keepAdminAccount, setKeepAdminAccount] = useState(true);
 
   useEffect(() => {
     setOwnerName(user?.name || '');
@@ -130,19 +131,58 @@ export const Settings: React.FC<SettingsProps> = ({ user, onUserUpdated }) => {
   };
 
   const handleDeleteAllData = async () => {
-    const confirm1 = window.confirm("CẢNH BÁO: Hành động này sẽ xóa VĨNH VIỄN toàn bộ dữ liệu (Sản phẩm, Đơn hàng, Khách hàng...). Bạn có chắc chắn không?");
+    const modeMsg = keepAdminAccount
+      ? 'Dữ liệu kinh doanh (Sản phẩm, Đơn hàng, Khách hàng, Nhập/Xuất kho, Công nợ) sẽ bị xóa VĨNH VIỄN. TÀI KHOẢN QUẢN TRỊ SẼ ĐƯỢC GIỮ LẠI (bạn vẫn đăng nhập được sau khi reload).'
+      : 'TOÀN BỘ dữ liệu (bao gồm cả TÀI KHOẢN QUẢN TRỊ) sẽ bị xóa VĨNH VIỄN. Sau khi reload, bạn sẽ phải tạo lại tài khoản quản trị từ đầu.';
+
+    const confirm1 = window.confirm(
+      `CẢNH BÁO (Lần 1/2):\n\n${modeMsg}\n\nBạn có chắc chắn muốn tiếp tục?`,
+    );
     if (!confirm1) return;
-    
-    const confirm2 = window.confirm("Xác nhận lại một lần nữa: Bạn sẽ mất sạch dữ liệu và không thể khôi phục nếu không có file backup. Tiếp tục xóa?");
+
+    const confirm2 = window.confirm(
+      `XÁC NHẬN (Lần 2/2):\n\nBạn sẽ mất ${keepAdminAccount ? 'toàn bộ dữ liệu kinh doanh' : 'HẾT TẤT CẢ (bao gồm cả tài khoản)'}` +
+      ' và không thể khôi phục nếu không có file backup. Tiếp tục xóa?',
+    );
     if (!confirm2) return;
 
     setLoading(true);
+    let detail: any = null;
     try {
-      await MockBackend.deleteAllData();
-      alert("Đã xóa toàn bộ dữ liệu thành công! Hệ thống sẽ khởi động lại.");
+      const result = await MockBackend.deleteAllData({ keepAdminAccount });
+      const fbCount = result.firebaseDeletedNodes.length;
+      const summary =
+        `✅ Xóa thành công.\n\n` +
+        `- Firebase (online): xóa ${fbCount} bảng dữ liệu\n` +
+        `- Local (trên máy này): đã xóa ${result.localCleared ? 'xong' : 'lỗi'}\n` +
+        `- Tài khoản admin: ${result.adminAccountKept ? 'được giữ lại ✅' : 'đã xóa ⚠️'}\n\n` +
+        'Hệ thống sẽ khởi động lại ngay.';
+      alert(summary);
       window.location.reload();
-    } catch (e) {
-      alert("Lỗi khi xóa dữ liệu. Vui lòng kiểm tra kết nối mạng.");
+    } catch (e: any) {
+      detail = e?.detail;
+      let msg = '❌ Lỗi khi xóa dữ liệu trên Firebase.';
+      if (detail?.firebaseFailedNodes?.length > 0) {
+        msg += `\n\nCác mục không xóa được trên Firebase:\n`;
+        for (const f of detail.firebaseFailedNodes) {
+          msg += `  • ${f.path}: ${f.error}\n`;
+        }
+      } else if (e?.message) {
+        msg += `\n\nChi tiết lỗi: ${e.message}`;
+      } else {
+        msg += '\n\nVui lòng kiểm tra kết nối mạng và Quyền (Rules) trên Firebase Console.';
+      }
+      if (detail?.firebaseDeletedNodes?.length) {
+        msg += `\n\nCác mục ĐÃ xóa được trên Firebase: ${detail.firebaseDeletedNodes.join(', ') || '—'}\n`;
+        msg += `Dữ liệu trên máy của bạn (local storage) đã được xóa.\n`;
+        msg += `Lưu ý: Dữ liệu còn sót trên Firebase có thể đồng bộ trở lại máy bạn ở lần mở app tiếp theo nếu vẫn còn trên Firebase.`;
+      } else {
+        msg += `\nDữ liệu local (trên máy) đã được xóa để đảm bảo nhất quán.`;
+      }
+      msg += `\n\nNhấn OK để reload (để đảm bảo trạng thái sạch).`;
+      if (window.confirm(msg)) {
+        window.location.reload();
+      }
     } finally {
       setLoading(false);
     }
@@ -289,9 +329,27 @@ export const Settings: React.FC<SettingsProps> = ({ user, onUserUpdated }) => {
         {/* Danger Zone */}
         <div className="bg-white rounded-xl shadow-sm border border-red-100 p-6">
           <h2 className="text-xl font-bold text-red-600 mb-4">Vùng nguy hiểm</h2>
-          <div className="flex flex-col sm:flex-row items-center gap-4">
-            <div className="flex-1">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="flex-1 space-y-3">
               <p className="text-sm text-gray-600">Hành động này sẽ xóa vĩnh viễn toàn bộ dữ liệu hiện có của cửa hàng trên cả thiết bị này và hệ thống online.</p>
+              <label className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3 cursor-pointer hover:bg-amber-100 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={keepAdminAccount}
+                  onChange={(e) => setKeepAdminAccount(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-amber-600"
+                />
+                <div className="text-xs sm:text-sm">
+                  <p className="font-semibold text-amber-800">
+                    {keepAdminAccount ? '✅ Giữ lại tài khoản quản trị' : '⚠️ Xóa luôn tài khoản quản trị'}
+                  </p>
+                  <p className="text-amber-700 mt-0.5">
+                    {keepAdminAccount
+                      ? 'Sau khi xóa, bạn vẫn đăng nhập được với mật khẩu cũ. Chỉ các dữ liệu kinh doanh (đơn hàng, tồn kho, khách, nợ...) bị xóa. (Khuyến nghị)'
+                      : 'Sau khi xóa, tài khoản admin bị xóa theo. Bạn phải tạo lại tài khoản quản trị từ đầu (như lúc mới cài app).'}
+                  </p>
+                </div>
+              </label>
               <p className="text-xs text-red-500 mt-1 font-medium italic">* Hãy chắc chắn bạn đã sao lưu dữ liệu trước khi thực hiện.</p>
             </div>
             <button

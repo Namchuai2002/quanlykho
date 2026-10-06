@@ -195,8 +195,6 @@ export const Orders: React.FC = () => {
             <td class="c"></td>
             <td class="r"></td>
             <td class="r"></td>
-            <td class="c"></td>
-            <td class="r"></td>
           </tr>
         `;
       }
@@ -211,8 +209,6 @@ export const Orders: React.FC = () => {
           <td class="c">${it.quantity}</td>
           <td class="r">${formatMoney(it.price)}</td>
           <td class="r">${formatMoney(lineTotal)}</td>
-          <td class="c"></td>
-          <td class="r"></td>
         </tr>
       `;
     }).join('');
@@ -232,7 +228,7 @@ export const Orders: React.FC = () => {
             background: #fff;
           }
           .sheet {
-            border: 1.5px solid #111;
+      
             padding: 14px 16px 18px;
             min-height: 250mm;
           }
@@ -271,7 +267,7 @@ export const Orders: React.FC = () => {
           <div class="company">
             <div class="name">CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ XỔ VIỆT</div>
             <div class="tag">CHUYÊN BÁN BUÔN - BÁN LẺ HÀNG THỰC PHẨM - MỸ PHẨM NGA - RUS</div>
-            <div class="addr">Số 11, ngách 15, ngõ 158 Nguyễn Sơn, P. Bồ Đề, Q. Long Biên, Hà Nội - ĐT: 0983272285</div>
+            <div class="addr">Số 11, ngách 15, ngõ 158 Nguyễn Sơn, P. Bồ Đề, Q. Long Biên, Hà Nội - ĐT: 0981795469</div>
           </div>
           <hr class="line" />
           <h1 class="doc-title">PHIẾU XUẤT KHO BÁN HÀNG</h1>
@@ -288,10 +284,8 @@ export const Orders: React.FC = () => {
               <col style="width:24%" />
               <col style="width:7%" />
               <col style="width:7%" />
-              <col style="width:12%" />
               <col style="width:13%" />
-              <col style="width:8%" />
-              <col style="width:11%" />
+              <col style="width:14%" />
             </colgroup>
             <thead>
               <tr>
@@ -302,22 +296,20 @@ export const Orders: React.FC = () => {
                 <th>SL</th>
                 <th>Đơn giá</th>
                 <th>Thành tiền</th>
-                <th>%CK</th>
-                <th>Tiền CK</th>
               </tr>
             </thead>
             <tbody>
               ${itemRows}
               <tr>
-                <td colspan="8" class="sum-label">Tổng tiền hàng:</td>
+                <td colspan="6" class="sum-label">Tổng tiền hàng:</td>
                 <td class="r">${formatMoney(goodsTotal)}</td>
               </tr>
               <tr>
-                <td colspan="8" class="sum-label">Tiền thuế GTGT:</td>
+                <td colspan="6" class="sum-label">Tiền thuế GTGT:</td>
                 <td class="r">${formatMoney(vatAmount)}</td>
               </tr>
               <tr>
-                <td colspan="8" class="sum-label">Tổng tiền thanh toán:</td>
+                <td colspan="6" class="sum-label">Tổng tiền thanh toán:</td>
                 <td class="r">${formatMoney(paymentTotal)}</td>
               </tr>
             </tbody>

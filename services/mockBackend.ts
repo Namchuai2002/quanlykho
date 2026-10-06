@@ -1182,27 +1182,94 @@ export const MockBackend = {
     }
   },
 
-  deleteAllData: async () => {
-    let onlineError: any = null;
+  deleteAllData: async (options: { keepAdminAccount?: boolean } = {}): Promise<{
+    firebaseDeletedNodes: string[];
+    firebaseFailedNodes: { path: string; error: string }[];
+    localCleared: boolean;
+    adminAccountKept: boolean;
+  }> => {
+    const keepAdmin = options.keepAdminAccount !== false;
+    const firebaseDeletedNodes: string[] = [];
+    const firebaseFailedNodes: { path: string; error: string }[] = [];
+
+    // Danh sách các node data cần xóa (luôn luôn)
+    const dataNodes = ['products', 'orders', 'customers', 'categories', 'imports', 'exports', 'payments'];
+    const allPathsToClear = [...dataNodes];
+    if (!keepAdmin) allPathsToClear.push('_auth');
+
     if (MockBackend.isOnlineMode()) {
+      // 1. Cách 1: dùng update() để xóa từng node riêng biệt cùng lúc → an toàn hơn set(ref(db), null)
+      // (rules có thể chặn set() ở root nhưng cho phép update() từng child)
       try {
-        // Database này dành riêng cho ứng dụng, nên xóa tận gốc để tránh sót payments/công nợ (bao gồm cả _auth)
-        await withTimeout(set(ref(db), null));
-      } catch (e) {
-        console.error("Clear Firebase data failed", e);
-        onlineError = e;
+        const batch: Record<string, null> = {};
+        allPathsToClear.forEach((p) => { batch[p] = null as any; });
+        await withTimeout(update(ref(db), batch), 30 * 1000);
+        firebaseDeletedNodes.push(...allPathsToClear);
+      } catch (e0: any) {
+        // Nếu batch xóa cùng lúc lỗi (ví dụ rules chặn bulk), thử xóa từng node từng cái
+        for (const path of allPathsToClear) {
+          try {
+            await withTimeout(set(ref(db, path), null), 15 * 1000);
+            firebaseDeletedNodes.push(path);
+          } catch (e1: any) {
+            const msg = (e1 && e1.message) ? String(e1.message) : (String(e1) || 'Lỗi không xác định');
+            firebaseFailedNodes.push({ path, error: msg });
+          }
+        }
+      }
+
+      // 2. Fallback cuối: nếu cách trên vẫn sót dữ liệu → thử xóa root (nếu user đồng ý xóa cả tài khoản)
+      //    Giữ lại root xóa khi keepAdmin=false và có node thất bại
+      if (!keepAdmin && firebaseFailedNodes.length > 0) {
+        try {
+          await withTimeout(set(ref(db), null), 40 * 1000);
+          firebaseDeletedNodes.length = 0;
+          firebaseFailedNodes.length = 0;
+          firebaseDeletedNodes.push('(root)');
+        } catch (e2: any) {
+          // Nếu vẫn thất bại → giữ nguyên danh sách failedNodes
+        }
       }
     }
-    
-    // Xóa sạch toàn bộ LocalStorage liên quan đến app (bao gồm cả tài khoản và phiên đăng nhập)
-    Object.values(STORAGE_KEYS).forEach(key => {
-      localStorage.removeItem(key);
-    });
-    
-    if (onlineError) {
-      throw onlineError;
+
+    // 3. Xóa local (LocalStorage) — keepAdmin true thì giữ lại AUTH + USER
+    const keysToRemove: string[] = [
+      STORAGE_KEYS.PRODUCTS,
+      STORAGE_KEYS.CATEGORIES,
+      STORAGE_KEYS.ORDERS,
+      STORAGE_KEYS.CUSTOMERS,
+      STORAGE_KEYS.IMPORTS,
+      STORAGE_KEYS.EXPORTS,
+      STORAGE_KEYS.PAYMENTS,
+    ];
+    if (!keepAdmin) {
+      keysToRemove.push(STORAGE_KEYS.AUTH, STORAGE_KEYS.USER);
+    } else {
+      // Để an toàn: giữ USER session nếu tài khoản admin được keep (tránh logout đột ngột)
+      // xóa USER session nếu không muốn giữ: bỏ STORAGE_KEYS.USER ra khỏi keep list
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+
+    // 4. Nếu Firebase còn lỗi → throw một lỗi tổng hợp nhưng vẫn trả về kết quả chi tiết
+    if (firebaseFailedNodes.length > 0) {
+      const err = new Error(
+        `Không xóa được ${firebaseFailedNodes.length} mục trên Firebase: ` +
+        firebaseFailedNodes.map((x) => `${x.path} (${x.error})`).join(', '),
+      );
+      (err as any).detail = {
+        firebaseDeletedNodes,
+        firebaseFailedNodes,
+        localCleared: true,
+        adminAccountKept: keepAdmin,
+      };
+      throw err;
     }
 
-    return true;
+    return {
+      firebaseDeletedNodes,
+      firebaseFailedNodes,
+      localCleared: true,
+      adminAccountKept: keepAdmin,
+    };
   }
 };
