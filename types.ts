@@ -26,6 +26,8 @@ export interface CartItem {
   quantity: number;
   name: string;
   price: number;
+  unit?: 'Thùng' | 'Gói' | string;
+  discountPercent?: number;
 }
 
 export interface Order {
@@ -42,6 +44,7 @@ export interface Order {
   paidAmount?: number;
   lastPaidAt?: string;
   dueDate?: string;
+  discountPercent?: number;
 }
 
 export interface User {

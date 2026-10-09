@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MockBackend } from '../services/mockBackend';
 import { Product, Category, Order, OrderStatus } from '../types';
-import { Search, Plus, Trash2, Edit2, Archive, Loader2, Image as ImageIcon, Filter, Tags, X, UploadCloud, Eye, PackagePlus } from 'lucide-react';
+import { Search, Plus, Trash2, Edit2, Archive, Loader2, Image as ImageIcon, Filter, Tags, X, UploadCloud, Eye, PackagePlus, ChevronDown, PackageMinus } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { NumberInput } from '../components/NumberInput';
 import { ImportRecord, ExportRecord } from '../types';
@@ -45,11 +45,14 @@ export const Inventory: React.FC = () => {
   const [formData, setFormData] = useState({
     name: '',
     sku: '',
-    price: 0,
     stock: 0,
     category: '',
     image: '',
   });
+  const [importPickerOpen, setImportPickerOpen] = useState(false);
+  const [importPickerSearch, setImportPickerSearch] = useState('');
+  const [importPickerCategory, setImportPickerCategory] = useState('');
+  const [expandedHistoryProductId, setExpandedHistoryProductId] = useState<string | null>(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -157,9 +160,10 @@ export const Inventory: React.FC = () => {
     e.preventDefault();
     setSaving(true);
     try {
-      // Nếu chưa chọn danh mục, gán mặc định nếu có
+      // Giá bán không cố định ở kho (mỗi đơn hàng khác nhau), mặc định 0 và nhập thủ công khi tạo đơn
       const finalData = {
         ...formData,
+        price: 0,
         category: formData.category || (categories.length > 0 ? categories[0].name : 'Chưa phân loại')
       };
 
@@ -241,7 +245,7 @@ export const Inventory: React.FC = () => {
   const openAddProductModal = () => {
     setEditingProduct(null);
     setFormData({ 
-      name: '', sku: '', price: 0, stock: 0, 
+      name: '', sku: '', stock: 0, 
       category: categories.length > 0 ? categories[0].name : '', 
       image: '' 
     });
@@ -253,7 +257,6 @@ export const Inventory: React.FC = () => {
     setFormData({
       name: product.name,
       sku: product.sku,
-      price: product.price,
       stock: product.stock,
       category: product.category,
       image: product.image || '',
@@ -278,20 +281,31 @@ export const Inventory: React.FC = () => {
            <h2 className="text-2xl font-bold text-gray-800">Quản Lý Kho Hàng</h2>
            <p className="text-sm text-gray-500 mt-1">Tổng: {filteredProducts.length} sản phẩm</p>
         </div>
-        <div className="flex space-x-2">
-          <button 
-            onClick={() => setIsCategoryModalOpen(true)}
-            className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg flex items-center space-x-2 shadow-sm transition-all"
+        <div className="flex flex-wrap gap-2 items-center">
+          <button
+            onClick={() => {
+              setImportPickerSearch('');
+              setImportPickerCategory('');
+              setImportPickerOpen(true);
+            }}
+            className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-6 py-2.5 rounded-xl flex items-center space-x-2 shadow-lg shadow-emerald-200 hover:shadow-xl hover:shadow-emerald-300 transition-all duration-200 font-semibold ring-2 ring-emerald-100 active:scale-95"
           >
-            <Tags size={18} />
-            <span className="hidden sm:inline">QL Danh Mục</span>
+            <PackagePlus size={20} strokeWidth={2.2} />
+            <span>Nhập Hàng</span>
           </button>
-          <button 
+          <button
             onClick={openAddProductModal}
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2 shadow-sm transition-all"
           >
             <Plus size={18} />
             <span className="hidden sm:inline">Thêm Sản Phẩm</span>
+          </button>
+          <button
+            onClick={() => setIsCategoryModalOpen(true)}
+            className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg flex items-center space-x-2 shadow-sm transition-all"
+          >
+            <Tags size={18} />
+            <span className="hidden sm:inline">QL Danh Mục</span>
           </button>
         </div>
       </div>
@@ -387,7 +401,6 @@ export const Inventory: React.FC = () => {
                   <th className="px-6 py-4">Tên Sản Phẩm</th>
                   <th className="px-6 py-4">Mã SKU</th>
                   <th className="px-6 py-4">Danh Mục</th>
-                  <th className="px-6 py-4 text-right">Giá Bán</th>
                   <th className="px-6 py-4 text-center">Tồn Kho</th>
                   <th className="px-6 py-4 text-right">Thao Tác</th>
                 </tr>
@@ -395,29 +408,32 @@ export const Inventory: React.FC = () => {
               <tbody className="divide-y divide-gray-100">
                 {filteredProducts.length > 0 ? (
                   visibleProducts.map((product) => (
-                    <tr key={product.id} className="hover:bg-gray-50 transition-colors">
+                    <tr
+                      key={product.id}
+                      className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
+                      onClick={() => { setDetailProduct(product); setIsDetailOpen(true); }}
+                    >
                       <td className="px-6 py-4">
                         {product.image ? (
-                          <img 
-                            src={product.image} 
-                            alt={product.name} 
-                            className="w-16 h-16 object-cover rounded-lg border border-gray-200"
+                          <img
+                            src={product.image}
+                            alt={product.name}
+                            className="w-16 h-16 object-cover rounded-lg border border-gray-200 group-hover:border-blue-300 transition-colors"
                             onError={(e) => {
                               (e.target as HTMLImageElement).src = 'https://via.placeholder.com/60?text=x';
                             }}
                           />
                         ) : (
-                          <div className="w-16 h-16 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center text-gray-400">
+                          <div className="w-16 h-16 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center text-gray-400 group-hover:border-blue-300 transition-colors">
                             <ImageIcon size={20} />
                           </div>
                         )}
                       </td>
-                      <td className="px-6 py-4 font-medium text-gray-800">{product.name}</td>
+                      <td className="px-6 py-4 font-medium text-gray-800 group-hover:text-blue-700 transition-colors">{product.name}</td>
                       <td className="px-6 py-4 text-gray-500 text-sm">{product.sku}</td>
                       <td className="px-6 py-4 text-gray-500 text-sm">
                         <span className="px-2 py-1 bg-gray-100 rounded-md">{product.category}</span>
                       </td>
-                      <td className="px-6 py-4 text-right font-medium text-gray-800">{product.price.toLocaleString()} ₫</td>
                       <td className="px-6 py-4 text-center">
                         <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
                           product.stock === 0 ? 'bg-gray-200 text-gray-700' :
@@ -432,29 +448,35 @@ export const Inventory: React.FC = () => {
                         ) : null}
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end space-x-2">
-                          <button 
+                        <div
+                          className="flex items-center justify-end space-x-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
                             onClick={() => { setDetailProduct(product); setIsDetailOpen(true); }}
-                            className="p-1.5 text-gray-700 hover:bg-gray-50 rounded-md transition-colors"
+                            className="p-1.5 text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+                            title="Xem lịch sử"
                           >
                             <Eye size={16} />
                           </button>
-                          <button 
+                          <button
                             onClick={() => openImportModal(product)}
                             className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"
                             title="Nhập hàng"
                           >
                             <PackagePlus size={16} />
                           </button>
-                          <button 
+                          <button
                             onClick={() => openEditProductModal(product)}
                             className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                            title="Sửa"
                           >
                             <Edit2 size={16} />
                           </button>
-                          <button 
+                          <button
                             onClick={() => handleDeleteProduct(product.id)}
                             className="p-1.5 text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                            title="Xóa"
                           >
                             <Trash2 size={16} />
                           </button>
@@ -464,7 +486,7 @@ export const Inventory: React.FC = () => {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-gray-400">
+                    <td colSpan={6} className="px-6 py-12 text-center text-gray-400">
                       <Archive size={48} className="mx-auto mb-3 opacity-20" />
                       <p>Không tìm thấy sản phẩm nào phù hợp.</p>
                     </td>
@@ -572,25 +594,16 @@ export const Inventory: React.FC = () => {
               </select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Giá Bán (VNĐ)</label>
-              <NumberInput 
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                value={formData.price}
-                onChange={(val) => setFormData({...formData, price: val})}
-                placeholder="0"
-                suffix="₫"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Số Lượng Tồn</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Số Lượng Tồn Ban Đầu</label>
               <NumberInput 
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 value={formData.stock}
                 onChange={(val) => setFormData({...formData, stock: val})}
                 placeholder="0"
               />
+              <p className="text-[11px] text-gray-400 mt-1 italic">Giá bán được nhập thủ công trên từng Đơn Hàng (không cố định ở đây).</p>
             </div>
           </div>
           <div className="pt-4 flex justify-end space-x-3">
@@ -688,78 +701,181 @@ export const Inventory: React.FC = () => {
         </form>
       </Modal>
       
-      <Modal 
-        isOpen={isDetailOpen} 
-        onClose={() => { setIsDetailOpen(false); setDetailProduct(null); }} 
-        title="Chi Tiết Sản Phẩm"
+      <Modal
+        isOpen={isDetailOpen}
+        onClose={() => { setIsDetailOpen(false); setDetailProduct(null); }}
+        title="Chi Tiết & Lịch Sử Nhập Xuất"
+        maxWidthClass="max-w-3xl"
       >
-        {detailProduct && (
-          <div className="space-y-4">
-            <div className="flex gap-4">
-              <div className="w-24 h-24 bg-gray-100 rounded overflow-hidden flex items-center justify-center">
-                {detailProduct.image ? <img src={detailProduct.image} className="object-cover w-full h-full" /> : <ImageIcon className="text-gray-400" />}
-              </div>
-              <div className="flex-1">
-                <p className="text-lg font-bold text-gray-800">{detailProduct.name}</p>
-                <p className="text-sm text-gray-500">SKU: {detailProduct.sku}</p>
-                <p className="text-sm text-gray-500">Danh mục: {detailProduct.category}</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-50 p-3 rounded">
-                <p className="text-sm text-gray-500">Giá bán</p>
-                <p className="text-xl font-bold text-blue-600">{detailProduct.price.toLocaleString()} ₫</p>
-              </div>
-              <div className="bg-gray-50 p-3 rounded">
-                <p className="text-sm text-gray-500">Tồn kho</p>
-                <p className="text-xl font-bold text-gray-800">{detailProduct.stock}</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-white border border-gray-200 rounded p-3">
-                <p className="font-semibold text-gray-800 mb-2">Lịch sử nhập</p>
-                {imports.filter(i => i.productId === detailProduct.id).length === 0 ? (
-                  <p className="text-sm text-gray-500">Chưa có lịch sử nhập cho sản phẩm này.</p>
-                ) : (
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {imports.filter(i => i.productId === detailProduct.id).slice(0, 20).map(rec => (
-                      <div key={rec.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
-                        <div className="min-w-0">
-                          <p className="text-xs text-gray-600">{new Date(rec.createdAt).toLocaleString('vi-VN')} • {rec.note || '—'}</p>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-sm font-bold text-emerald-700">+{rec.quantity}</span>
-                          {typeof rec.totalCost === 'number' && (
-                            <span className="block text-[10px] text-gray-600">{rec.totalCost.toLocaleString()} ₫</span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+        {detailProduct && (() => {
+          const prodImports = imports.filter(i => i.productId === detailProduct.id);
+          const prodExports = exports.filter(e => e.productId === detailProduct.id);
+          const totalIn = prodImports.reduce((s, i) => s + i.quantity, 0);
+          const totalOut = prodExports.reduce((s, e) => s + e.quantity, 0);
+
+          type TimelineItem =
+            | { kind: 'in'; id: string; date: Date; quantity: number; unitCost?: number; totalCost?: number; supplierName?: string; note?: string }
+            | { kind: 'out'; id: string; date: Date; quantity: number; orderId: string; customerName: string; customerPhone: string };
+
+          const timeline: TimelineItem[] = [
+            ...prodImports.map(i => ({
+              kind: 'in' as const,
+              id: i.id,
+              date: new Date(i.createdAt),
+              quantity: i.quantity,
+              unitCost: i.unitCost,
+              totalCost: i.totalCost,
+              supplierName: i.supplierName,
+              note: i.note,
+            })),
+            ...prodExports.map(e => ({
+              kind: 'out' as const,
+              id: e.id,
+              date: new Date(e.createdAt),
+              quantity: e.quantity,
+              orderId: e.orderId,
+              customerName: e.customerName,
+              customerPhone: e.customerPhone,
+            })),
+          ].sort((a, b) => b.date.getTime() - a.date.getTime());
+
+          return (
+            <div className="space-y-5">
+              {/* Thông tin SP */}
+              <div className="flex gap-4 items-start">
+                <div className="w-24 h-24 bg-gray-100 rounded-lg overflow-hidden flex items-center justify-center border border-gray-200 flex-shrink-0">
+                  {detailProduct.image ? <img src={detailProduct.image} className="object-cover w-full h-full" /> : <ImageIcon className="text-gray-400" size={32} />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xl font-bold text-gray-800 truncate">{detailProduct.name}</p>
+                  <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500">
+                    <span className="inline-flex items-center gap-1">
+                      <span className="font-medium text-gray-600">SKU:</span> {detailProduct.sku}
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="font-medium text-gray-600">Danh mục:</span> {detailProduct.category}
+                    </span>
                   </div>
+                </div>
+              </div>
+
+              {/* 3 thẻ tóm tắt */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-gradient-to-br from-blue-50 to-blue-100/60 p-4 rounded-xl border border-blue-100">
+                  <p className="text-xs text-blue-700/80 font-medium uppercase tracking-wide">Tồn kho hiện tại</p>
+                  <p className="text-2xl font-bold text-blue-800 mt-1">{detailProduct.stock}</p>
+                </div>
+                <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/60 p-4 rounded-xl border border-emerald-100">
+                  <p className="text-xs text-emerald-700/80 font-medium uppercase tracking-wide">Tổng đã nhập</p>
+                  <p className="text-2xl font-bold text-emerald-800 mt-1">+{totalIn}</p>
+                </div>
+                <div className="bg-gradient-to-br from-red-50 to-red-100/60 p-4 rounded-xl border border-red-100">
+                  <p className="text-xs text-red-700/80 font-medium uppercase tracking-wide">Tổng đã xuất</p>
+                  <p className="text-2xl font-bold text-red-800 mt-1">-{totalOut}</p>
+                </div>
+              </div>
+
+              {/* Timeline gộp nhập - xuất */}
+              <div className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                  <h4 className="font-semibold text-gray-800 flex items-center gap-2">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-500"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                    Lịch sử nhập - xuất ({timeline.length})
+                  </h4>
+                  <span className="text-xs text-gray-500">Mới nhất ở trên</span>
+                </div>
+
+                {timeline.length === 0 ? (
+                  <div className="py-12 text-center text-gray-400">
+                    <PackageMinus size={36} className="mx-auto mb-2 opacity-40" />
+                    <p className="text-sm">Chưa có giao dịch nhập hoặc xuất cho sản phẩm này.</p>
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-gray-100 max-h-[50vh] overflow-y-auto">
+                    {timeline.map(item => {
+                      const isIn = item.kind === 'in';
+                      return (
+                        <li key={item.id} className="p-4 flex gap-3 hover:bg-gray-50/70 transition-colors">
+                          {/* Dọc timeline indicator */}
+                          <div className="flex flex-col items-center">
+                            <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${isIn ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                              {isIn ? <PackagePlus size={16} /> : <PackageMinus size={16} />}
+                            </div>
+                          </div>
+
+                          {/* Nội dung */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start justify-between gap-3 flex-wrap">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${isIn ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                                    {isIn ? 'NHẬP KHO' : 'XUẤT KHO'}
+                                  </span>
+                                  <span className="text-xs text-gray-500 font-medium">
+                                    {item.date.toLocaleString('vi-VN')}
+                                  </span>
+                                </div>
+
+                                {isIn ? (
+                                  <div className="mt-2 space-y-1 text-sm text-gray-600">
+                                    {item.supplierName && (
+                                      <p className="flex items-center gap-2">
+                                        <span className="text-gray-400">🏭 NCC:</span>
+                                        <span className="font-medium text-gray-800">{item.supplierName}</span>
+                                      </p>
+                                    )}
+                                    {typeof item.unitCost === 'number' && (
+                                      <p className="flex items-center gap-2">
+                                        <span className="text-gray-400">💰 Đơn giá nhập:</span>
+                                        <span className="font-semibold text-emerald-700">
+                                          {item.unitCost.toLocaleString('vi-VN')} ₫
+                                        </span>
+                                      </p>
+                                    )}
+                                    {item.note && (
+                                      <p className="flex items-center gap-2">
+                                        <span className="text-gray-400">📝 Ghi chú:</span>
+                                        <span className="italic">{item.note}</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="mt-2 space-y-1 text-sm text-gray-600">
+                                    <p className="flex items-center gap-2">
+                                      <span className="text-gray-400">📋 Đơn hàng:</span>
+                                      <span className="font-semibold text-blue-700">#{item.orderId}</span>
+                                    </p>
+                                    <p className="flex items-center gap-2 flex-wrap">
+                                      <span className="text-gray-400">👤 Khách:</span>
+                                      <span className="font-medium text-gray-800">{item.customerName}</span>
+                                      <span className="text-gray-500">({item.customerPhone})</span>
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Số lượng + thành tiền */}
+                              <div className="text-right flex-shrink-0">
+                                <p className={`text-lg font-extrabold ${isIn ? 'text-emerald-700' : 'text-red-700'}`}>
+                                  {isIn ? '+' : '-'}{item.quantity}
+                                </p>
+                                {isIn && typeof item.totalCost === 'number' && (
+                                  <p className="text-xs text-gray-500 mt-0.5">
+                                    Thành tiền: <span className="font-semibold text-gray-700">{item.totalCost.toLocaleString('vi-VN')} ₫</span>
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 )}
               </div>
-              <div className="bg-white border border-gray-200 rounded p-3">
-                <p className="font-semibold text-gray-800 mb-2">Lịch sử xuất</p>
-                {exports.filter(e => e.productId === detailProduct.id).length === 0 ? (
-                  <p className="text-sm text-gray-500">Chưa có lịch sử xuất cho sản phẩm này.</p>
-                ) : (
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {exports.filter(e => e.productId === detailProduct.id).slice(0, 20).map(rec => (
-                      <div key={rec.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
-                        <div className="min-w-0">
-                          <p className="text-xs text-gray-600">{new Date(rec.createdAt).toLocaleString('vi-VN')} • Đơn {rec.orderId} • {rec.customerName}</p>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-sm font-bold text-red-700">-{rec.quantity}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* --- CATEGORY MANAGE MODAL --- */}
@@ -805,51 +921,206 @@ export const Inventory: React.FC = () => {
         </div>
       </Modal>
       
-      {/* --- LỊCH SỬ NHẬP HÀNG --- */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <h3 className="text-lg font-bold text-gray-800 mb-4">Lịch Sử Nhập Hàng</h3>
-        {imports.length === 0 ? (
-          <p className="text-gray-500 text-sm">Chưa có lịch sử nhập hàng.</p>
-        ) : (
-          <div className="space-y-2">
-            {imports.slice(0, 20).map(rec => (
-              <div key={rec.id} className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200">
-                <div className="min-w-0">
-                  <p className="font-medium text-gray-800 text-sm truncate">{rec.name} <span className="text-gray-500">({rec.sku})</span></p>
-                  <p className="text-xs text-gray-500">{new Date(rec.createdAt).toLocaleString('vi-VN')} • {rec.note || '—'}</p>
-                </div>
-                <div className="text-right">
-                  <span className="block text-sm font-bold text-emerald-700">+{rec.quantity}</span>
-                  {typeof rec.totalCost === 'number' && (
-                    <span className="text-[10px] text-gray-600">{rec.totalCost.toLocaleString()} ₫</span>
-                  )}
-                </div>
-              </div>
-            ))}
+      {/* --- IMPORT PICKER MODAL: chọn SP để nhập --- */}
+      <Modal
+        isOpen={importPickerOpen}
+        onClose={() => setImportPickerOpen(false)}
+        title="Chọn hàng hóa cần nhập"
+      >
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="relative md:col-span-2">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+              <input
+                type="text"
+                placeholder="Tìm tên hoặc mã SKU..."
+                className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                value={importPickerSearch}
+                onChange={(e) => setImportPickerSearch(e.target.value)}
+              />
+            </div>
+            <select
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm bg-white"
+              value={importPickerCategory}
+              onChange={(e) => setImportPickerCategory(e.target.value)}
+            >
+              <option value="">-- Tất cả danh mục --</option>
+              {categories.map(c => (
+                <option key={c.id} value={c.name}>{c.name}</option>
+              ))}
+            </select>
           </div>
-        )}
-      </div>
+          <div className="max-h-[55vh] overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-100">
+            {(() => {
+              const list = products.filter(p => {
+                const s = importPickerSearch.trim().toLowerCase();
+                const hitName = !s || p.name.toLowerCase().includes(s) || p.sku.toLowerCase().includes(s);
+                const hitCat = !importPickerCategory || p.category === importPickerCategory;
+                return hitName && hitCat;
+              });
+              if (list.length === 0) {
+                return (
+                  <p className="text-center text-gray-400 text-sm py-10">
+                    <PackagePlus size={40} className="mx-auto mb-2 opacity-30" />
+                    Không tìm thấy sản phẩm nào.
+                  </p>
+                );
+              }
+              return list.map(p => (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between p-3 hover:bg-emerald-50 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {p.image ? (
+                      <img src={p.image} alt={p.name} className="w-10 h-10 object-cover rounded border border-gray-200" />
+                    ) : (
+                      <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center text-gray-400">
+                        <ImageIcon size={16} />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-800 text-sm truncate">{p.name}</p>
+                      <p className="text-[11px] text-gray-500">
+                        {p.sku} • {p.category} • Tồn: <span className="font-semibold">{p.stock}</span>
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportPickerOpen(false);
+                      openImportModal(p);
+                    }}
+                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 text-xs font-semibold flex items-center gap-1"
+                  >
+                    <PackagePlus size={14} /> Nhập hàng
+                  </button>
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      </Modal>
       
-      {/* --- LỊCH SỬ XUẤT KHO --- */}
+      {/* --- LỊCH SỬ NHẬP XUẤT (theo từng sản phẩm) --- */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <h3 className="text-lg font-bold text-gray-800 mb-4">Lịch Sử Xuất Kho</h3>
-        {exports.length === 0 ? (
-          <p className="text-gray-500 text-sm">Chưa có lịch sử xuất kho.</p>
-        ) : (
-          <div className="space-y-2">
-            {exports.slice(0, 20).map(rec => (
-              <div key={rec.id} className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200">
-                <div className="min-w-0">
-                  <p className="font-medium text-gray-800 text-sm truncate">{rec.name} <span className="text-gray-500">({rec.sku})</span></p>
-                  <p className="text-xs text-gray-500">{new Date(rec.createdAt).toLocaleString('vi-VN')} • Đơn {rec.orderId} • {rec.customerName} ({rec.customerPhone})</p>
-                </div>
-                <div className="text-right">
-                  <span className="block text-sm font-bold text-red-700">-{rec.quantity}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <h3 className="text-lg font-bold text-gray-800 mb-4">Lịch Sử Nhập / Xuất Kho <span className="text-sm font-normal text-gray-500">(Nhấn vào sản phẩm để xem chi tiết)</span></h3>
+        {(() => {
+          // 1. Gộp tất cả productId (từ cả imports + exports + products)
+          const productSet = new Map<string, { name: string; sku: string }>();
+          products.forEach(p => productSet.set(p.id, { name: p.name, sku: p.sku }));
+          imports.forEach(r => { if (!productSet.has(r.productId)) productSet.set(r.productId, { name: r.name, sku: r.sku }); });
+          exports.forEach(r => { if (!productSet.has(r.productId)) productSet.set(r.productId, { name: r.name, sku: r.sku }); });
+
+          const items = Array.from(productSet.entries())
+            .map(([productId, meta]) => {
+              const imps = imports.filter(i => i.productId === productId);
+              const exps = exports.filter(e => e.productId === productId);
+              const totalIn = imps.reduce((s, i) => s + i.quantity, 0);
+              const totalOut = exps.reduce((s, e) => s + e.quantity, 0);
+              const lastAct = [
+                imps.length ? new Date(imps[imps.length - 1].createdAt).getTime() : 0,
+                exps.length ? new Date(exps[exps.length - 1].createdAt).getTime() : 0,
+              ];
+              const lastAt = Math.max(...lastAct);
+              return { productId, name: meta.name, sku: meta.sku, totalIn, totalOut, lastAt };
+            })
+            .filter(x => x.totalIn + x.totalOut > 0)
+            .sort((a, b) => b.lastAt - a.lastAt);
+
+          if (items.length === 0) return <p className="text-gray-500 text-sm">Chưa có lịch sử nhập hoặc xuất kho.</p>;
+
+          return (
+            <div className="space-y-2">
+              {items.map(it => {
+                const open = expandedHistoryProductId === it.productId;
+                return (
+                  <div key={it.productId} className="border border-gray-200 rounded-lg overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedHistoryProductId(open ? null : it.productId)}
+                      className="w-full flex items-center justify-between p-3 hover:bg-gray-50 text-left transition-colors"
+                    >
+                      <div className="min-w-0 flex-1 mr-2">
+                        <p className="font-semibold text-gray-800 truncate">{it.name} <span className="text-xs text-gray-500 font-normal">({it.sku})</span></p>
+                        <div className="flex flex-wrap gap-3 text-[11px] text-gray-600 mt-0.5">
+                          <span className="text-emerald-700 font-medium">Tổng nhập: +{it.totalIn}</span>
+                          <span className="text-red-700 font-medium">Tổng xuất: -{it.totalOut}</span>
+                          {it.lastAt > 0 && (
+                            <span className="text-gray-500">Hoạt động gần nhất: {new Date(it.lastAt).toLocaleDateString('vi-VN')}</span>
+                          )}
+                        </div>
+                      </div>
+                      <span className={`transform transition-transform ${open ? 'rotate-180' : ''} text-gray-500`}>
+                        <ChevronDown size={20} />
+                      </span>
+                    </button>
+                    {open && (
+                      <div className="border-t border-gray-200 bg-gray-50/70 p-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="bg-white rounded-md border border-gray-200 p-3">
+                          <p className="text-sm font-semibold text-emerald-700 mb-2 flex items-center gap-1"><PackagePlus size={15} /> Lịch sử nhập ({imports.filter(i => i.productId === it.productId).length})</p>
+                          {(() => {
+                            const arr = imports.filter(i => i.productId === it.productId);
+                            return arr.length === 0 ? (
+                              <p className="text-xs text-gray-500">Chưa có.</p>
+                            ) : (
+                              <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                                {arr.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(r => (
+                                  <div key={r.id} className="flex items-start justify-between p-2 bg-gray-50 rounded border border-gray-200 text-xs gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-gray-700 font-medium">{new Date(r.createdAt).toLocaleString('vi-VN')}</p>
+                                      <div className="mt-0.5 space-y-0.5 text-[11px] text-gray-500">
+                                        {r.supplierName && <p>🏭 NCC: <span className="text-gray-700">{r.supplierName}</span></p>}
+                                        {typeof r.unitCost === 'number' && (
+                                          <p>💰 Đơn giá: <span className="font-semibold text-emerald-700">{r.unitCost.toLocaleString('vi-VN')} ₫</span></p>
+                                        )}
+                                        {r.note && <p>📝 {r.note}</p>}
+                                      </div>
+                                    </div>
+                                    <div className="text-right flex-shrink-0">
+                                      <span className="font-bold text-emerald-700 text-sm">+{r.quantity}</span>
+                                      {typeof r.totalCost === 'number' && (
+                                        <span className="block text-[10px] text-gray-600 mt-0.5">Thành tiền<br />{r.totalCost.toLocaleString('vi-VN')} ₫</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        <div className="bg-white rounded-md border border-gray-200 p-3">
+                          <p className="text-sm font-semibold text-red-700 mb-2 flex items-center gap-1"><PackageMinus size={15} /> Lịch sử xuất ({exports.filter(e => e.productId === it.productId).length})</p>
+                          {(() => {
+                            const arr = exports.filter(e => e.productId === it.productId);
+                            return arr.length === 0 ? (
+                              <p className="text-xs text-gray-500">Chưa có.</p>
+                            ) : (
+                              <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                                {arr.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(r => (
+                                  <div key={r.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200 text-xs">
+                                    <div className="min-w-0">
+                                      <p className="text-gray-700">{new Date(r.createdAt).toLocaleString('vi-VN')} • Đơn {r.orderId}</p>
+                                      <p className="text-gray-500 truncate">{r.customerName} ({r.customerPhone})</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <span className="font-bold text-red-700">-{r.quantity}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

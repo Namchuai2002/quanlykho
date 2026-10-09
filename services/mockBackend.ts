@@ -1,4 +1,4 @@
-import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ExportRecord, PaymentRecord } from '../types';
+import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ExportRecord, PaymentRecord, CartItem } from '../types';
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, get, set, child, update, push } from 'firebase/database';
 
@@ -1030,6 +1030,65 @@ export const MockBackend = {
     } else {
       throw new Error('Chỉ hỗ trợ online');
     }
+  },
+
+  updateOrder: async (
+    orderId: string,
+    patch: Partial<Pick<Order, 'customerName' | 'customerPhone' | 'address' | 'totalAmount' | 'discountPercent'>> & {
+      items?: CartItem[];
+    },
+  ) => {
+    if (!MockBackend.isOnlineMode()) {
+      // Offline fallback: local-only update (items only if not completed)
+      const ordersLocal = await MockBackend.getOrders();
+      const idx = ordersLocal.findIndex(o => o.id === orderId);
+      if (idx === -1) throw new Error('Đơn hàng không tồn tại');
+      const current = ordersLocal[idx];
+      const safePatch: any = {
+        customerName: patch.customerName,
+        customerPhone: patch.customerPhone,
+        address: patch.address,
+        totalAmount: patch.totalAmount,
+        discountPercent: patch.discountPercent,
+      };
+      if (current.status !== OrderStatus.COMPLETED && patch.items) {
+        // Đơn chưa hoàn thành: cho phép sửa items (chưa bao giờ trừ kho nên không cần cập nhật stock)
+        safePatch.items = patch.items;
+      } else if (current.status === OrderStatus.COMPLETED && patch.items) {
+        // Đơn đã hoàn thành: chỉ cho sửa KH, không cho sửa items để tránh sai lệch kho/xuất kho
+        // (có thể xử lý delta nếu cần nhưng giữ đơn giản)
+      }
+      ordersLocal[idx] = { ...current, ...safePatch };
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(ordersLocal));
+      return ordersLocal[idx];
+    }
+    // Online path
+    const orderSnap = await withTimeout(get(ref(db, `orders/${orderId}`)));
+    if (!orderSnap || !(orderSnap as any).exists || !(orderSnap as any).exists()) {
+      throw new Error('Đơn hàng không tồn tại');
+    }
+    const current = (orderSnap as any).val() as Order;
+    const updates: any = {};
+
+    const safePatch: any = {};
+    if (typeof patch.customerName === 'string') safePatch.customerName = patch.customerName;
+    if (typeof patch.customerPhone === 'string') safePatch.customerPhone = patch.customerPhone;
+    if (typeof patch.address === 'string') safePatch.address = patch.address;
+    if (typeof patch.totalAmount === 'number') safePatch.totalAmount = patch.totalAmount;
+    if (typeof patch.discountPercent === 'number') safePatch.discountPercent = patch.discountPercent;
+
+    if (patch.items && current.status !== OrderStatus.COMPLETED) {
+      // Chưa hoàn thành -> cho phép sửa items thoải mái (chưa bao giờ trừ kho, chưa ghi export record)
+      safePatch.items = patch.items;
+    }
+
+    updates[`orders/${orderId}`] = { ...current, ...safePatch };
+
+    // Nếu đơn đã COMPLETED và người dùng có sửa items -> bỏ qua items để tránh sai lệch
+    // (khi có yêu cầu mạnh mẽ hơn thì xử lý delta export/stock riêng)
+
+    await withTimeout(update(ref(db), updates));
+    return { ...current, ...safePatch } as Order;
   },
   
   deleteOrder: async (orderId: string) => {
