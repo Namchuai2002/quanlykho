@@ -1,11 +1,30 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MockBackend } from '../services/mockBackend';
 import { Product, Category, Order, OrderStatus, ImportPaymentStatus, ImportLineItem, PaymentRecord } from '../types';
-import { Search, Plus, Trash2, Edit2, Archive, Loader2, Image as ImageIcon, Filter, Tags, X, UploadCloud, Eye, PackagePlus, ChevronDown, PackageMinus, CheckCircle, XCircle, FileText, Clock } from 'lucide-react';
+import { Search, Plus, Trash2, Edit2, Archive, Loader2, Image as ImageIcon, Filter, Tags, X, UploadCloud, Eye, PackagePlus, ChevronDown, PackageMinus, CheckCircle, XCircle, FileText, Clock, User, ChevronRight, Calendar } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { NumberInput } from '../components/NumberInput';
 import { ImportRecord, ExportRecord } from '../types';
 import { DebtService } from '../services/debtService';
+
+type ImportViewMode = 'bySupplier' | 'bySlip';
+type PayStatus = 'unpaid' | 'partial' | 'paid';
+type SupplierDetailTab = 'overview' | 'history';
+
+interface SupplierImportGroup {
+  key: string;
+  name: string;
+  slipCount: number;
+  itemCount: number;
+  quantity: number;
+  total: number;
+  paid: number;
+  outstanding: number;
+  latestAt: string;
+  importIds: string[];
+}
+
+const supplierKeyOf = (name: string) => (name || '').trim().toLowerCase() || 'unknown';
 
 export const Inventory: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
@@ -45,6 +64,14 @@ export const Inventory: React.FC = () => {
   const [importListSearch, setImportListSearch] = useState('');
   const [importListStatus, setImportListStatus] = useState<'all' | 'unpaid' | 'partial' | 'paid'>('all');
   const [inventoryTab, setInventoryTab] = useState<'stock' | 'imports'>('stock');
+  const [importViewMode, setImportViewMode] = useState<ImportViewMode>('bySupplier');
+  const [supplierDetailOpen, setSupplierDetailOpen] = useState(false);
+  const [selectedSupplierKey, setSelectedSupplierKey] = useState<string | null>(null);
+  const [supplierReturnKey, setSupplierReturnKey] = useState<string | null>(null);
+  const [supplierDetailTab, setSupplierDetailTab] = useState<SupplierDetailTab>('overview');
+  const [expandedImportIds, setExpandedImportIds] = useState<Set<string>>(new Set());
+  const [supplierSlipSearch, setSupplierSlipSearch] = useState('');
+  const [supplierSlipStatus, setSupplierSlipStatus] = useState<'all' | PayStatus>('all');
 
   // Category Manage Input
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -259,6 +286,7 @@ export const Inventory: React.FC = () => {
 
   const openImportWorkspace = (product?: Product) => {
     setInventoryTab('imports');
+    setSupplierReturnKey(null);
     resetImportForm();
     if (product) addProductToImport(product);
     setIsImportModalOpen(true);
@@ -273,6 +301,11 @@ export const Inventory: React.FC = () => {
     setViewingImport(null);
     setImportFormError('');
     importSubmittingRef.current = false;
+    if (supplierReturnKey) {
+      setSelectedSupplierKey(supplierReturnKey);
+      setSupplierDetailOpen(true);
+      setSupplierDetailTab('history');
+    }
   };
 
   const openImportSlip = (imp: ImportRecord) => {
@@ -309,6 +342,79 @@ export const Inventory: React.FC = () => {
     const paid = importForm.paymentStatus === 'paid' ? total : 0;
     return { total, paid, outstanding: Math.max(0, total - paid), count: importLines.length };
   }, [importLines, importForm.paymentStatus, viewingImport, payments]);
+
+  const openSupplierDetail = (group: SupplierImportGroup) => {
+    setSelectedSupplierKey(group.key);
+    setSupplierDetailTab('overview');
+    setExpandedImportIds(new Set());
+    setSupplierSlipSearch('');
+    setSupplierSlipStatus('all');
+    setSupplierDetailOpen(true);
+  };
+
+  const openImportSlipFromSupplier = (imp: ImportRecord) => {
+    setSupplierReturnKey(selectedSupplierKey);
+    setSupplierDetailOpen(false);
+    openImportSlip(imp);
+  };
+
+  const supplierGroups: SupplierImportGroup[] = useMemo(() => {
+    const payables = DebtService.computePayables(imports, payments);
+    const payableById = new Map(payables.map((p) => [p.id, p]));
+    const map = new Map<string, SupplierImportGroup>();
+    for (const imp of imports) {
+      const name = (imp.supplierName || '').trim() || 'Nhà cung cấp';
+      const key = supplierKeyOf(name);
+      const p = payableById.get(imp.id);
+      const total = p?.total ?? (imp.totalCost || 0);
+      const paid = p?.paid ?? (imp.paidAmount || 0);
+      const outstanding = p?.outstanding ?? Math.max(0, total - paid);
+      const lines = DebtService.getImportLineItems(imp);
+      const qty = lines.reduce((s, l) => s + l.quantity, 0);
+      const cur = map.get(key);
+      if (!cur) {
+        map.set(key, {
+          key,
+          name,
+          slipCount: 1,
+          itemCount: lines.length,
+          quantity: qty,
+          total,
+          paid,
+          outstanding,
+          latestAt: imp.createdAt,
+          importIds: [imp.id],
+        });
+      } else {
+        cur.slipCount += 1;
+        cur.itemCount += lines.length;
+        cur.quantity += qty;
+        cur.total += total;
+        cur.paid += paid;
+        cur.outstanding += outstanding;
+        cur.importIds.push(imp.id);
+        if (new Date(imp.createdAt).getTime() > new Date(cur.latestAt).getTime()) {
+          cur.latestAt = imp.createdAt;
+        }
+      }
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime(),
+    );
+  }, [imports, payments]);
+
+  const selectedSupplier = useMemo(
+    () => supplierGroups.find((g) => g.key === selectedSupplierKey),
+    [supplierGroups, selectedSupplierKey],
+  );
+
+  const selectedSupplierImports = useMemo(() => {
+    if (!selectedSupplier) return [] as ImportRecord[];
+    const ids = new Set(selectedSupplier.importIds);
+    return imports
+      .filter((imp) => ids.has(imp.id))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [imports, selectedSupplier]);
 
   const importPayStatusBadge = (s: 'unpaid' | 'partial' | 'paid') => {
     if (s === 'paid')
@@ -1257,14 +1363,22 @@ export const Inventory: React.FC = () => {
         </div>
       </Modal>
       
-      {/* --- DANH SÁCH PHIẾU NHẬP (bố cục giống Phải thu) --- */}
+      {/* --- DANH SÁCH PHIẾU NHẬP (theo người nhập, giống Phải thu) --- */}
       {inventoryTab === 'imports' && (() => {
         const payables = DebtService.computePayables(imports, payments);
         const payableById = new Map(payables.map((p) => [p.id, p]));
         const s = importListSearch.trim().toLowerCase();
-        const filtered = imports.filter((imp) => {
+        const slipStatusOf = (imp: ImportRecord): PayStatus => {
           const p = payableById.get(imp.id);
-          const status = p?.status || (imp.paymentStatus === 'paid' ? 'paid' : 'unpaid');
+          if (p?.status) return p.status;
+          const total = imp.totalCost || 0;
+          const paid = DebtService.computePaidForImport(imp, payments);
+          if (imp.paymentStatus === 'paid' || (paid >= total && total > 0)) return 'paid';
+          if (paid > 0) return 'partial';
+          return 'unpaid';
+        };
+        const filteredSlips = imports.filter((imp) => {
+          const status = slipStatusOf(imp);
           const matchSearch =
             !s ||
             imp.id.toLowerCase().includes(s) ||
@@ -1275,12 +1389,48 @@ export const Inventory: React.FC = () => {
           const matchStatus = importListStatus === 'all' ? true : status === importListStatus;
           return matchSearch && matchStatus;
         });
+        const filteredSuppliers = supplierGroups.filter((g) => {
+          const matchSearch =
+            !s ||
+            g.name.toLowerCase().includes(s) ||
+            g.importIds.some((id) => id.toLowerCase().includes(s)) ||
+            imports.filter((imp) => g.importIds.includes(imp.id)).some((imp) =>
+              DebtService.getImportLineItems(imp).some(
+                (l) => l.name.toLowerCase().includes(s) || l.sku.toLowerCase().includes(s),
+              ),
+            );
+          const groupStatus: PayStatus = g.outstanding <= 0 ? 'paid' : g.paid <= 0 ? 'unpaid' : 'partial';
+          const matchStatus = importListStatus === 'all' ? true : groupStatus === importListStatus;
+          return matchSearch && matchStatus;
+        });
         const summary = DebtService.computePayableSummary(payables);
         return (
           <div className="space-y-4">
             <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+              <div className="bg-white border border-gray-200 rounded-lg p-1 flex">
+                <button
+                  type="button"
+                  onClick={() => setImportViewMode('bySupplier')}
+                  className={`px-4 py-2 rounded-md text-sm font-semibold flex items-center gap-1.5 transition ${
+                    importViewMode === 'bySupplier' ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <User size={15}/> Theo người nhập
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImportViewMode('bySlip')}
+                  className={`px-4 py-2 rounded-md text-sm font-semibold flex items-center gap-1.5 transition ${
+                    importViewMode === 'bySlip' ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <FileText size={15}/> Theo phiếu nhập
+                </button>
+              </div>
               <input
-                placeholder="Tìm theo nhà cung cấp, mã phiếu, hàng hóa..."
+                placeholder={importViewMode === 'bySupplier'
+                  ? 'Tìm theo tên người nhập, mã phiếu, hàng hóa...'
+                  : 'Tìm theo nhà cung cấp, mã phiếu, hàng hóa...'}
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg"
                 value={importListSearch}
                 onChange={(e) => setImportListSearch(e.target.value)}
@@ -1306,87 +1456,520 @@ export const Inventory: React.FC = () => {
                 <p className="text-xl font-bold text-emerald-700">{summary.paid.toLocaleString()} ₫</p>
               </div>
               <div className="bg-white border border-gray-200 rounded p-4">
-                <p className="text-xs text-gray-500">Phiếu nhập còn nợ</p>
-                <p className="text-xl font-bold text-indigo-700">{summary.debtCount}</p>
+                <p className="text-xs text-gray-500">
+                  {importViewMode === 'bySupplier' ? 'Người còn nợ' : 'Phiếu nhập còn nợ'}
+                </p>
+                <p className="text-xl font-bold text-indigo-700">
+                  {importViewMode === 'bySupplier'
+                    ? supplierGroups.filter((g) => g.outstanding > 0).length
+                    : summary.debtCount}
+                </p>
               </div>
               <div className="bg-white border border-gray-200 rounded p-4">
-                <p className="text-xs text-gray-500">Tổng phiếu nhập</p>
-                <p className="text-xl font-bold text-gray-800">{imports.length}</p>
+                <p className="text-xs text-gray-500">
+                  {importViewMode === 'bySupplier' ? 'Tổng người nhập' : 'Tổng phiếu nhập'}
+                </p>
+                <p className="text-xl font-bold text-gray-800">
+                  {importViewMode === 'bySupplier' ? supplierGroups.length : imports.length}
+                </p>
               </div>
             </div>
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="px-5 py-3 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-blue-50 flex items-center justify-between">
-                <p className="text-sm font-bold text-indigo-900 flex items-center gap-2">
-                  <FileText size={16}/> DANH SÁCH PHIẾU NHẬP
-                </p>
-                <p className="text-xs text-indigo-700/80">Nhấn vào dòng để xem chi tiết phiếu</p>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-semibold">
-                    <tr>
-                      <th className="px-6 py-4">Phiếu nhập</th>
-                      <th className="px-6 py-4">Nhà cung cấp</th>
-                      <th className="px-6 py-4 text-right">Tổng</th>
-                      <th className="px-6 py-4 text-right">Đã trả</th>
-                      <th className="px-6 py-4 text-right">Còn nợ</th>
-                      <th className="px-6 py-4">TT thanh toán</th>
-                      <th className="px-6 py-4 text-right">Ngày</th>
-                      <th className="px-6 py-4 text-right">Thao tác</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {filtered.map((imp) => {
-                      const p = payableById.get(imp.id);
-                      const total = p?.total ?? (imp.totalCost || 0);
-                      const paid = p?.paid ?? (imp.paidAmount || 0);
-                      const outstanding = p?.outstanding ?? Math.max(0, total - paid);
-                      const status = p?.status || (outstanding <= 0 && total > 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid');
-                      return (
-                        <tr
-                          key={imp.id}
-                          className="hover:bg-indigo-50/40 cursor-pointer transition-colors"
-                          onClick={() => openImportSlip(imp)}
-                        >
-                          <td className="px-6 py-4 text-sm font-medium text-gray-800">{imp.id}</td>
-                          <td className="px-6 py-4 text-sm text-gray-700">{imp.supplierName || '—'}</td>
-                          <td className="px-6 py-4 text-right text-sm text-gray-800 font-semibold">{formatMoney(total)} ₫</td>
-                          <td className="px-6 py-4 text-right text-sm text-emerald-700 font-semibold">{formatMoney(paid)} ₫</td>
-                          <td className="px-6 py-4 text-right">
-                            <span className={`text-sm font-black ${outstanding > 0 ? 'text-red-700' : 'text-green-600'}`}>
-                              {formatMoney(outstanding)} ₫
-                            </span>
-                          </td>
-                          <td className="px-6 py-4">{importPayStatusBadge(status)}</td>
-                          <td className="px-6 py-4 text-right text-xs text-gray-500">
-                            {new Date(imp.createdAt).toLocaleDateString('vi-VN')}
-                          </td>
-                          <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              type="button"
-                              onClick={() => openImportSlip(imp)}
-                              className="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
-                            >
-                              Xem
-                            </button>
+
+            {importViewMode === 'bySupplier' ? (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="px-5 py-3 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-blue-50 flex items-center justify-between">
+                  <p className="text-sm font-bold text-indigo-900 flex items-center gap-2">
+                    <User size={16}/> DANH SÁCH NGƯỜI NHẬP HÀNG
+                  </p>
+                  <p className="text-xs text-indigo-700/80">Nhấn vào dòng để xem lịch sử nhập của người đó</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-semibold">
+                      <tr>
+                        <th className="px-6 py-4">Người nhập hàng</th>
+                        <th className="px-6 py-4 text-center">Số phiếu</th>
+                        <th className="px-6 py-4 text-right">Tổng tiền</th>
+                        <th className="px-6 py-4 text-right">Đã trả</th>
+                        <th className="px-6 py-4 text-right">Còn nợ</th>
+                        <th className="px-6 py-4">TT thanh toán</th>
+                        <th className="px-6 py-4 text-right">Nhập gần nhất</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {filteredSuppliers.map((g) => {
+                        const ps: PayStatus = g.outstanding <= 0 ? 'paid' : g.paid <= 0 ? 'unpaid' : 'partial';
+                        return (
+                          <tr
+                            key={g.key}
+                            className="hover:bg-indigo-50/40 cursor-pointer transition-colors"
+                            onClick={() => openSupplierDetail(g)}
+                          >
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 text-white flex items-center justify-center font-bold text-sm shadow-sm">
+                                  {(g.name || '?').charAt(0).toUpperCase()}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-sm font-bold text-gray-800 truncate">{g.name}</p>
+                                  <p className="text-xs text-gray-500">{g.itemCount} mặt hàng • SL {g.quantity}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <span className="inline-flex items-center justify-center min-w-[36px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 text-sm font-black border border-indigo-200">
+                                {g.slipCount}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-right text-sm text-gray-800 font-semibold">{formatMoney(g.total)} ₫</td>
+                            <td className="px-6 py-4 text-right text-sm text-emerald-700 font-semibold">{formatMoney(g.paid)} ₫</td>
+                            <td className="px-6 py-4 text-right">
+                              <span className={`text-sm font-black ${g.outstanding > 0 ? 'text-red-700' : 'text-green-600'}`}>
+                                {formatMoney(g.outstanding)} ₫
+                              </span>
+                            </td>
+                            <td className="px-6 py-4">{importPayStatusBadge(ps)}</td>
+                            <td className="px-6 py-4 text-right text-xs text-gray-500">
+                              {new Date(g.latestAt).toLocaleDateString('vi-VN')}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {filteredSuppliers.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-6 py-12 text-center text-gray-400">
+                            Không tìm thấy người nhập hàng phù hợp.
                           </td>
                         </tr>
-                      );
-                    })}
-                    {filtered.length === 0 && (
-                      <tr>
-                        <td colSpan={8} className="px-6 py-12 text-center text-gray-400">
-                          Không có phiếu nhập phù hợp.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="px-5 py-3 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-blue-50 flex items-center justify-between">
+                  <p className="text-sm font-bold text-indigo-900 flex items-center gap-2">
+                    <FileText size={16}/> DANH SÁCH PHIẾU NHẬP
+                  </p>
+                  <p className="text-xs text-indigo-700/80">Nhấn vào dòng để xem chi tiết phiếu</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-semibold">
+                      <tr>
+                        <th className="px-6 py-4">Phiếu nhập</th>
+                        <th className="px-6 py-4">Người nhập hàng</th>
+                        <th className="px-6 py-4 text-right">Tổng</th>
+                        <th className="px-6 py-4 text-right">Đã trả</th>
+                        <th className="px-6 py-4 text-right">Còn nợ</th>
+                        <th className="px-6 py-4">TT thanh toán</th>
+                        <th className="px-6 py-4 text-right">Ngày</th>
+                        <th className="px-6 py-4 text-right">Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {filteredSlips.map((imp) => {
+                        const p = payableById.get(imp.id);
+                        const total = p?.total ?? (imp.totalCost || 0);
+                        const paid = p?.paid ?? (imp.paidAmount || 0);
+                        const outstanding = p?.outstanding ?? Math.max(0, total - paid);
+                        const status = slipStatusOf(imp);
+                        return (
+                          <tr
+                            key={imp.id}
+                            className="hover:bg-indigo-50/40 cursor-pointer transition-colors"
+                            onClick={() => openImportSlip(imp)}
+                          >
+                            <td className="px-6 py-4 text-sm font-medium text-gray-800">{imp.id}</td>
+                            <td className="px-6 py-4 text-sm text-gray-700">{imp.supplierName || '—'}</td>
+                            <td className="px-6 py-4 text-right text-sm text-gray-800 font-semibold">{formatMoney(total)} ₫</td>
+                            <td className="px-6 py-4 text-right text-sm text-emerald-700 font-semibold">{formatMoney(paid)} ₫</td>
+                            <td className="px-6 py-4 text-right">
+                              <span className={`text-sm font-black ${outstanding > 0 ? 'text-red-700' : 'text-green-600'}`}>
+                                {formatMoney(outstanding)} ₫
+                              </span>
+                            </td>
+                            <td className="px-6 py-4">{importPayStatusBadge(status)}</td>
+                            <td className="px-6 py-4 text-right text-xs text-gray-500">
+                              {new Date(imp.createdAt).toLocaleDateString('vi-VN')}
+                            </td>
+                            <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => openImportSlip(imp)}
+                                className="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
+                              >
+                                Xem
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {filteredSlips.length === 0 && (
+                        <tr>
+                          <td colSpan={8} className="px-6 py-12 text-center text-gray-400">
+                            Không có phiếu nhập phù hợp.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
+
+      <Modal
+        isOpen={supplierDetailOpen && !!selectedSupplier}
+        onClose={() => {
+          setSupplierDetailOpen(false);
+          setSelectedSupplierKey(null);
+          setSupplierReturnKey(null);
+        }}
+        title="Chi tiết người nhập hàng"
+        maxWidthClass="max-w-6xl"
+      >
+        {selectedSupplier && (() => {
+          const slipMeta = (imp: ImportRecord) => {
+            const lines = DebtService.getImportLineItems(imp);
+            const total = typeof imp.totalCost === 'number' ? imp.totalCost : lines.reduce((s, l) => s + l.totalCost, 0);
+            const paid = DebtService.computePaidForImport(imp, payments);
+            const outstanding = Math.max(0, total - paid);
+            const status: PayStatus =
+              imp.paymentStatus === 'paid' || (paid >= total && total > 0)
+                ? 'paid'
+                : paid > 0
+                  ? 'partial'
+                  : 'unpaid';
+            return { lines, total, paid, outstanding, status, qty: lines.reduce((s, l) => s + l.quantity, 0) };
+          };
+          const q = supplierSlipSearch.trim().toLowerCase();
+          const historySlips = selectedSupplierImports.filter((imp) => {
+            const { status, lines } = slipMeta(imp);
+            const matchSearch =
+              !q ||
+              imp.id.toLowerCase().includes(q) ||
+              lines.some((l) => l.name.toLowerCase().includes(q) || l.sku.toLowerCase().includes(q));
+            const matchStatus = supplierSlipStatus === 'all' ? true : status === supplierSlipStatus;
+            return matchSearch && matchStatus;
+          });
+          const groupStatus: PayStatus =
+            selectedSupplier.outstanding <= 0 ? 'paid' : selectedSupplier.paid <= 0 ? 'unpaid' : 'partial';
+          return (
+            <div className="space-y-5">
+              <div className="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 border-2 border-indigo-100 rounded-2xl p-5 shadow-sm">
+                <div className="flex items-start gap-4 flex-wrap">
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-600 to-purple-600 text-white flex items-center justify-center font-black text-2xl shadow-lg">
+                    {(selectedSupplier.name || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-xl font-black text-gray-900 truncate">{selectedSupplier.name}</h3>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-sm text-gray-600">
+                      <span className="flex items-center gap-1.5"><FileText size={14}/> {selectedSupplier.slipCount} phiếu nhập</span>
+                      <span className="flex items-center gap-1.5"><PackagePlus size={14}/> {selectedSupplier.quantity} sản phẩm</span>
+                      <span className="flex items-center gap-1.5">
+                        <Clock size={14}/> Nhập gần nhất: <strong>{new Date(selectedSupplier.latestAt).toLocaleDateString('vi-VN')}</strong>
+                      </span>
+                      {importPayStatusBadge(groupStatus)}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="bg-white rounded-xl border border-gray-200 px-3 py-2 text-center shadow-sm">
+                      <p className="text-[10px] font-bold uppercase text-gray-500 tracking-wide">Số phiếu</p>
+                      <p className="text-lg font-black text-indigo-700">{selectedSupplier.slipCount}</p>
+                    </div>
+                    <div className="bg-white rounded-xl border border-gray-200 px-3 py-2 text-center shadow-sm">
+                      <p className="text-[10px] font-bold uppercase text-gray-500 tracking-wide">Tổng tiền</p>
+                      <p className="text-md font-black text-gray-800 leading-tight">{formatMoney(selectedSupplier.total)}</p>
+                      <p className="text-[9px] text-gray-500">VNĐ</p>
+                    </div>
+                    <div className="bg-white rounded-xl border border-green-200 px-3 py-2 text-center shadow-sm">
+                      <p className="text-[10px] font-bold uppercase text-green-600 tracking-wide">Đã trả</p>
+                      <p className="text-md font-black text-green-700 leading-tight">{formatMoney(selectedSupplier.paid)}</p>
+                      <p className="text-[9px] text-green-500">VNĐ</p>
+                    </div>
+                    <div className={`rounded-xl border-2 px-3 py-2 text-center shadow-sm ${
+                      selectedSupplier.outstanding > 0
+                        ? 'bg-gradient-to-br from-red-50 to-amber-50 border-red-300'
+                        : 'bg-gradient-to-br from-green-50 to-emerald-50 border-green-300'
+                    }`}>
+                      <p className={`text-[10px] font-bold uppercase tracking-wide ${selectedSupplier.outstanding > 0 ? 'text-red-600' : 'text-green-600'}`}>Còn nợ</p>
+                      <p className={`text-md font-black leading-tight ${selectedSupplier.outstanding > 0 ? 'text-red-700' : 'text-green-700'}`}>
+                        {formatMoney(selectedSupplier.outstanding)}
+                      </p>
+                      <p className={`text-[9px] ${selectedSupplier.outstanding > 0 ? 'text-red-500' : 'text-green-500'}`}>VNĐ</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <div className="grid grid-cols-2 border-b border-gray-200 bg-gray-50">
+                  <button
+                    type="button"
+                    onClick={() => setSupplierDetailTab('overview')}
+                    className={`py-3 px-3 text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
+                      supplierDetailTab === 'overview'
+                        ? 'bg-white text-indigo-700 border-b-2 border-indigo-600 -mb-px'
+                        : 'text-gray-600 hover:bg-gray-100/60'
+                    }`}
+                  >
+                    <FileText size={15}/> Tổng quan
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSupplierDetailTab('history')}
+                    className={`py-3 px-3 text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
+                      supplierDetailTab === 'history'
+                        ? 'bg-white text-indigo-700 border-b-2 border-indigo-600 -mb-px'
+                        : 'text-gray-600 hover:bg-gray-100/60'
+                    }`}
+                  >
+                    <Clock size={15}/> Lịch sử nhập hàng
+                  </button>
+                </div>
+
+                <div className="p-5">
+                  {supplierDetailTab === 'overview' && (
+                    <div className="space-y-5">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="bg-gradient-to-br from-indigo-500 to-blue-600 text-white rounded-xl p-4 shadow-md">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-indigo-50/90">Tổng phiếu nhập</p>
+                          <p className="text-3xl font-black mt-1">{selectedSupplier.slipCount}</p>
+                        </div>
+                        <div className="bg-gradient-to-br from-slate-600 to-slate-800 text-white rounded-xl p-4 shadow-md">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-100/90">Tổng tiền nhập</p>
+                          <p className="text-2xl font-black mt-1 leading-tight">{formatMoney(selectedSupplier.total)}</p>
+                          <p className="text-[10px] text-slate-200/90 mt-0.5">{selectedSupplier.itemCount} dòng hàng</p>
+                        </div>
+                        <div className="bg-gradient-to-br from-emerald-500 to-green-700 text-white rounded-xl p-4 shadow-md">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-50/90">Đã thanh toán</p>
+                          <p className="text-2xl font-black mt-1 leading-tight">{formatMoney(selectedSupplier.paid)}</p>
+                        </div>
+                        <div className={`rounded-xl p-4 shadow-md text-white ${
+                          selectedSupplier.outstanding > 0
+                            ? 'bg-gradient-to-br from-red-500 to-rose-700'
+                            : 'bg-gradient-to-br from-green-500 to-emerald-700'
+                        }`}>
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-white/90">Công nợ hiện tại</p>
+                          <p className="text-2xl font-black mt-1 leading-tight">{formatMoney(selectedSupplier.outstanding)}</p>
+                          <p className="text-[10px] text-white/90 mt-0.5">
+                            {selectedSupplier.outstanding > 0 ? 'Chưa thanh toán xong' : 'Không còn nợ'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-sm font-black text-gray-900 flex items-center gap-1.5">
+                            <FileText size={14}/> 3 PHIẾU NHẬP GẦN NHẤT
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={() => setSupplierDetailTab('history')}
+                            className="text-xs font-bold text-indigo-700 hover:text-indigo-800 flex items-center gap-0.5"
+                          >
+                            Xem tất cả <ChevronRight size={13}/>
+                          </button>
+                        </div>
+                        <div className="border border-gray-200 rounded-xl overflow-hidden">
+                          {selectedSupplierImports.slice(0, 3).map((imp) => {
+                            const meta = slipMeta(imp);
+                            return (
+                              <div key={imp.id} className="px-4 py-3 border-b border-gray-100 last:border-b-0 hover:bg-indigo-50/30">
+                                <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4 justify-between">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <p className="font-bold text-sm text-indigo-700 font-mono">{imp.id}</p>
+                                      {importPayStatusBadge(meta.status)}
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
+                                      <Calendar size={11}/> {new Date(imp.createdAt).toLocaleString('vi-VN')} • {meta.qty} SP
+                                    </p>
+                                    <p className="text-xs text-gray-600 mt-0.5 truncate">
+                                      {meta.lines.map((l) => `${l.name} (${l.quantity})`).join(' • ')}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-3 md:gap-4 text-right">
+                                    <div>
+                                      <p className="text-[10px] font-bold uppercase text-gray-500">Tổng</p>
+                                      <p className="text-sm font-bold text-gray-800">{formatMoney(meta.total)} ₫</p>
+                                    </div>
+                                    <div>
+                                      <p className="text-[10px] font-bold uppercase text-green-600">Đã trả</p>
+                                      <p className="text-sm font-bold text-green-700">{formatMoney(meta.paid)} ₫</p>
+                                    </div>
+                                    <div>
+                                      <p className={`text-[10px] font-bold uppercase ${meta.outstanding > 0 ? 'text-red-600' : 'text-green-600'}`}>Còn nợ</p>
+                                      <p className={`text-sm font-black ${meta.outstanding > 0 ? 'text-red-700' : 'text-green-700'}`}>{formatMoney(meta.outstanding)} ₫</p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => openImportSlipFromSupplier(imp)}
+                                      className="px-3 py-1 text-xs font-bold bg-indigo-600 text-white rounded-md hover:bg-indigo-700 flex items-center gap-1"
+                                    >
+                                      <Eye size={11}/> Xem phiếu
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {selectedSupplierImports.length === 0 && (
+                            <div className="px-4 py-10 text-center text-gray-400 text-sm">Chưa có phiếu nhập.</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {supplierDetailTab === 'history' && (
+                    <div className="space-y-4">
+                      <div className="flex flex-col lg:flex-row lg:items-center gap-3 bg-gray-50 rounded-xl p-3 border border-gray-200">
+                        <div className="relative flex-1">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={15}/>
+                          <input
+                            placeholder="Tìm mã phiếu hoặc tên hàng..."
+                            value={supplierSlipSearch}
+                            onChange={(e) => setSupplierSlipSearch(e.target.value)}
+                            className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                          />
+                        </div>
+                        <select
+                          value={supplierSlipStatus}
+                          onChange={(e) => setSupplierSlipStatus(e.target.value as any)}
+                          className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                        >
+                          <option value="all">Tất cả trạng thái TT</option>
+                          <option value="unpaid">Chưa thanh toán</option>
+                          <option value="partial">Thanh toán một phần</option>
+                          <option value="paid">Đã thanh toán đủ</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (historySlips.length === 0) return;
+                            const allIds = new Set(historySlips.map((x) => x.id));
+                            setExpandedImportIds((prev) => {
+                              const allOpened = allIds.size > 0 && Array.from(allIds).every((id) => prev.has(id));
+                              return allOpened ? new Set() : allIds;
+                            });
+                          }}
+                          className="px-3 py-1.5 text-xs font-bold text-indigo-700 bg-white border border-indigo-200 rounded-md hover:bg-indigo-50"
+                        >
+                          {historySlips.length > 0 && historySlips.every((x) => expandedImportIds.has(x.id))
+                            ? 'Thu gọn tất cả'
+                            : 'Mở rộng tất cả'}
+                        </button>
+                      </div>
+
+                      <p className="text-xs text-gray-500">{historySlips.length} phiếu nhập</p>
+                      <div className="space-y-2">
+                        {historySlips.map((imp) => {
+                          const meta = slipMeta(imp);
+                          const open = expandedImportIds.has(imp.id);
+                          return (
+                            <div key={imp.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExpandedImportIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(imp.id)) next.delete(imp.id);
+                                    else next.add(imp.id);
+                                    return next;
+                                  });
+                                }}
+                                className="w-full flex items-center justify-between p-3 hover:bg-indigo-50/40 text-left transition-colors"
+                              >
+                                <div className="min-w-0 flex-1 mr-3">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-bold text-sm text-indigo-700 font-mono">{imp.id}</span>
+                                    {importPayStatusBadge(meta.status)}
+                                  </div>
+                                  <p className="text-xs text-gray-500 mt-0.5">
+                                    {new Date(imp.createdAt).toLocaleString('vi-VN')} • {meta.lines.length} mặt hàng • SL {meta.qty}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-4 flex-shrink-0">
+                                  <div className="text-right hidden sm:block">
+                                    <p className="text-[10px] uppercase font-bold text-gray-500">Tổng</p>
+                                    <p className="text-sm font-bold text-gray-800">{formatMoney(meta.total)} ₫</p>
+                                  </div>
+                                  <span className={`transform transition-transform text-gray-500 ${open ? 'rotate-180' : ''}`}>
+                                    <ChevronDown size={18} />
+                                  </span>
+                                </div>
+                              </button>
+                              {open && (
+                                <div className="border-t border-gray-200 bg-gray-50/70 p-3 space-y-3">
+                                  <div className="grid grid-cols-3 gap-2">
+                                    <div className="bg-white rounded-lg border border-gray-200 px-3 py-2">
+                                      <p className="text-[10px] font-bold uppercase text-gray-500">Tổng tiền</p>
+                                      <p className="text-sm font-black text-gray-800">{formatMoney(meta.total)} ₫</p>
+                                    </div>
+                                    <div className="bg-white rounded-lg border border-green-200 px-3 py-2">
+                                      <p className="text-[10px] font-bold uppercase text-green-600">Đã trả</p>
+                                      <p className="text-sm font-black text-green-700">{formatMoney(meta.paid)} ₫</p>
+                                    </div>
+                                    <div className="bg-white rounded-lg border border-red-200 px-3 py-2">
+                                      <p className="text-[10px] font-bold uppercase text-red-600">Còn nợ</p>
+                                      <p className={`text-sm font-black ${meta.outstanding > 0 ? 'text-red-700' : 'text-green-700'}`}>{formatMoney(meta.outstanding)} ₫</p>
+                                    </div>
+                                  </div>
+                                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                                    <table className="w-full text-left border-collapse">
+                                      <thead className="bg-gray-50 text-gray-600 uppercase text-[11px] font-semibold">
+                                        <tr>
+                                          <th className="px-4 py-2">Sản phẩm</th>
+                                          <th className="px-4 py-2">SKU</th>
+                                          <th className="px-4 py-2 text-right">Số lượng</th>
+                                          <th className="px-4 py-2 text-right">Đơn giá nhập</th>
+                                          <th className="px-4 py-2 text-right">Thành tiền</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-gray-100">
+                                        {meta.lines.map((l, idx) => (
+                                          <tr key={`${imp.id}_${idx}`}>
+                                            <td className="px-4 py-2 text-sm font-medium text-gray-800">{l.name}</td>
+                                            <td className="px-4 py-2 text-sm text-gray-600">{l.sku}</td>
+                                            <td className="px-4 py-2 text-sm text-right font-semibold">{l.quantity}</td>
+                                            <td className="px-4 py-2 text-sm text-right">{formatMoney(l.unitCost)} ₫</td>
+                                            <td className="px-4 py-2 text-sm text-right font-semibold">{formatMoney(l.totalCost)} ₫</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                  <div className="flex justify-end">
+                                    <button
+                                      type="button"
+                                      onClick={() => openImportSlipFromSupplier(imp)}
+                                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-semibold flex items-center gap-1.5"
+                                    >
+                                      <Eye size={14}/> Xem chi tiết phiếu
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {historySlips.length === 0 && (
+                          <div className="py-12 text-center text-gray-400 text-sm">Không có phiếu nhập phù hợp.</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
 
       {/* --- LỊCH SỬ NHẬP XUẤT (theo từng sản phẩm) --- */}
       {inventoryTab === 'stock' && (
