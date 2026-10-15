@@ -79,9 +79,22 @@ export const Settings: React.FC<SettingsProps> = ({ user, onUserUpdated }) => {
       
       const importsSheet = XLSX.utils.json_to_sheet(imports.map(im => ({
         MãNhập: im.id, SP_ID: im.productId, TênSP: im.name, SKU: im.sku, SL: im.quantity, GiáNhập: im.unitCost || 0,
-        TổngGiá: im.totalCost || 0, Ngày: im.createdAt, NCC: im.supplierName || '', GhiChú: im.note || ''
+        TổngGiá: im.totalCost || 0, Ngày: im.createdAt, NCC: im.supplierName || '',
+        TrạngTháiTT: im.paymentStatus === 'paid' ? 'Đã thanh toán' : im.paymentStatus === 'unpaid' ? 'Chưa thanh toán' : '',
+        ĐãTrả: im.paidAmount || 0
       })));
       XLSX.utils.book_append_sheet(wb, importsSheet, 'Nhập kho');
+      const importLinesSheet = XLSX.utils.json_to_sheet(imports.flatMap((im) => {
+        const lines = Array.isArray(im.items) && im.items.length > 0
+          ? im.items
+          : [{ productId: im.productId, sku: im.sku, name: im.name, quantity: im.quantity, unitCost: im.unitCost || 0, totalCost: im.totalCost || 0 }];
+        return lines.map((l) => ({
+          MãNhập: im.id, NCC: im.supplierName || '', SP_ID: l.productId, TênSP: l.name, SKU: l.sku,
+          SL: l.quantity, GiáNhập: l.unitCost, ThànhTiền: l.totalCost,
+          TrạngTháiTT: im.paymentStatus === 'paid' ? 'Đã thanh toán' : im.paymentStatus === 'unpaid' ? 'Chưa thanh toán' : '',
+        }));
+      }));
+      XLSX.utils.book_append_sheet(wb, importLinesSheet, 'Chi tiết nhập');
       
       const exportsSheet = XLSX.utils.json_to_sheet(exports.map(ex => ({
         MãXuất: ex.id, SP_ID: ex.productId, TênSP: ex.name, SKU: ex.sku, SL: ex.quantity, Ngày: ex.createdAt,

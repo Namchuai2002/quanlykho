@@ -68,6 +68,24 @@ export interface Customer {
   note?: string;
 }
 
+export type ImportPaymentStatus = 'paid' | 'unpaid';
+
+export interface ImportLineItem {
+  productId: string;
+  sku: string;
+  name: string;
+  quantity: number;
+  unitCost: number;
+  totalCost: number;
+}
+
+export interface ImportStockPayload {
+  items: { productId: string; quantity: number; unitCost: number }[];
+  supplierName: string;
+  paymentStatus: ImportPaymentStatus;
+  requestId?: string;
+}
+
 export interface ImportRecord {
   id: string;
   productId: string;
@@ -77,10 +95,11 @@ export interface ImportRecord {
   unitCost?: number;
   totalCost?: number;
   createdAt: string;
-  note?: string;
   supplierName?: string;
   paidAmount?: number;
   lastPaidAt?: string;
+  paymentStatus?: ImportPaymentStatus;
+  items?: ImportLineItem[];
 }
 
 export interface ExportRecord {

@@ -1,4 +1,4 @@
-import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ExportRecord, PaymentRecord, CartItem } from '../types';
+import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ImportLineItem, ImportStockPayload, ExportRecord, PaymentRecord, CartItem } from '../types';
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, get, set, child, update, push } from 'firebase/database';
 
@@ -80,6 +80,8 @@ const STORAGE_KEYS = {
   PAYMENTS: 'app_payments',
   AUTH: 'app_auth',
 };
+
+const pendingImportIds = new Set<string>();
 
 export interface AdminAuthConfig {
   username: string;
@@ -493,83 +495,186 @@ export const MockBackend = {
     return combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   },
 
-  importStock: async (productId: string, quantity: number, unitCost?: number, note?: string, supplierName?: string, paidNow?: boolean): Promise<ImportRecord> => {
-    if (quantity <= 0) throw new Error('Số lượng nhập phải > 0');
-    const products = await MockBackend.getProducts();
-    const product = products.find(p => p.id === productId);
-    if (!product) throw new Error('Sản phẩm không tồn tại');
-    const id = `IMP${Date.now().toString().slice(-8)}`;
-    const now = new Date().toISOString();
-    const totalCost = unitCost ? unitCost * quantity : undefined;
-    const record: ImportRecord = {
-      id,
-      productId,
-      sku: product.sku,
-      name: product.name,
-      quantity,
-      unitCost,
-      totalCost,
-      createdAt: now,
-      note,
-      supplierName: supplierName || note,
-      paidAmount: paidNow && unitCost ? totalCost : 0,
-      lastPaidAt: paidNow && unitCost ? now : undefined,
-    };
+  importStock: async (payload: ImportStockPayload): Promise<ImportRecord> => {
+    const supplier = (payload?.supplierName || '').trim();
+    const paymentStatus = payload?.paymentStatus;
+    const rawItems = Array.isArray(payload?.items) ? payload.items : [];
+    const requestId = (payload?.requestId || '').trim();
 
-    const offlineWrite = async () => {
-      const list = await MockBackend.getImports();
-      localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify([record, ...list]));
-      const newProducts = products.map(p => p.id === product.id ? { ...p, stock: (p.stock || 0) + quantity, importDate: now } : p);
-      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(newProducts));
-    };
+    if (!supplier) throw new Error('Vui lòng nhập nhà cung cấp');
+    if (paymentStatus !== 'paid' && paymentStatus !== 'unpaid') {
+      throw new Error('Vui lòng chọn trạng thái thanh toán (Đã thanh toán hoặc Chưa thanh toán)');
+    }
+    if (rawItems.length === 0) throw new Error('Vui lòng chọn hàng hóa');
 
-    if (MockBackend.isOnlineMode()) {
-      try {
-        const updates: any = {};
-        updates['imports/' + id] = record;
-        updates['products/' + product.id + '/stock'] = (product.stock || 0) + quantity;
-        updates['products/' + product.id + '/importDate'] = now;
-        if (paidNow && unitCost && totalCost) {
-          const paymentId = `PAY${Date.now().toString().slice(-8)}`;
-          const pay: PaymentRecord = {
-            id: paymentId,
-            kind: 'payable',
-            importId: id,
-            amount: totalCost,
-            method: 'bank',
-            createdAt: now,
-            note,
-            supplierName: record.supplierName
-          };
-          updates['payments/' + paymentId] = pay;
-        }
-        await withTimeout(update(ref(db), updates));
-      } catch (e) {
-        try {
-          await offlineWrite();
-        } catch {
-          throw e;
-        }
+    const mergedQty = new Map<string, { quantity: number; unitCost: number }>();
+    for (const it of rawItems) {
+      if (!it?.productId) throw new Error('Thiếu mã hàng hóa');
+      if (!Number.isFinite(it.quantity) || it.quantity <= 0) {
+        throw new Error('Số lượng nhập phải lớn hơn 0');
       }
-    } else {
-      await offlineWrite();
-      if (paidNow && unitCost && totalCost) {
-        const payments = await MockBackend.getPayments();
-        const paymentId = `PAY${Date.now().toString().slice(-8)}`;
-        const pay: PaymentRecord = {
-          id: paymentId,
-          kind: 'payable',
-          importId: id,
-          amount: totalCost,
-          method: 'bank',
-          createdAt: now,
-          note,
-          supplierName: record.supplierName
-        };
-        localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([pay, ...payments]));
+      if (!Number.isFinite(it.unitCost) || it.unitCost < 0) {
+        throw new Error('Giá nhập không hợp lệ');
+      }
+      const cur = mergedQty.get(it.productId);
+      if (cur) {
+        mergedQty.set(it.productId, {
+          quantity: cur.quantity + Math.floor(it.quantity),
+          unitCost: Math.floor(it.unitCost),
+        });
+      } else {
+        mergedQty.set(it.productId, {
+          quantity: Math.floor(it.quantity),
+          unitCost: Math.floor(it.unitCost),
+        });
       }
     }
-    return record;
+
+    const lookupImport = async (importId: string): Promise<ImportRecord | undefined> => {
+      try {
+        const localRaw = localStorage.getItem(STORAGE_KEYS.IMPORTS);
+        const localList: ImportRecord[] = localRaw ? JSON.parse(localRaw) : [];
+        const localHit = localList.find((i) => i.id === importId);
+        if (localHit) return localHit;
+      } catch {}
+      if (MockBackend.isOnlineMode()) {
+        try {
+          const snap = await withTimeout(get(ref(db, `imports/${importId}`)));
+          if (snap && (snap as any).exists && (snap as any).exists()) {
+            return (snap as any).val() as ImportRecord;
+          }
+        } catch {}
+      }
+      const list = await MockBackend.getImports();
+      return list.find((i) => i.id === importId);
+    };
+
+    const id = requestId || `IMP${Date.now().toString().slice(-8)}${Math.random().toString(36).slice(2, 5)}`;
+    if (pendingImportIds.has(id)) {
+      for (let i = 0; i < 25; i++) {
+        await new Promise((r) => setTimeout(r, 80));
+        const found = await lookupImport(id);
+        if (found) return found;
+      }
+      throw new Error('Phiếu nhập đang được xử lý. Vui lòng không bấm xác nhận nhiều lần.');
+    }
+    pendingImportIds.add(id);
+
+    try {
+      const already = await lookupImport(id);
+      if (already) return already;
+
+      const products = await MockBackend.getProducts();
+      const lineItems: ImportLineItem[] = [];
+      const stockDelta = new Map<string, number>();
+
+      for (const [productId, it] of mergedQty.entries()) {
+        const product = products.find((p) => p.id === productId);
+        if (!product) throw new Error(`Sản phẩm không tồn tại`);
+        const totalCost = it.unitCost * it.quantity;
+        lineItems.push({
+          productId: product.id,
+          sku: product.sku,
+          name: product.name,
+          quantity: it.quantity,
+          unitCost: it.unitCost,
+          totalCost,
+        });
+        stockDelta.set(product.id, (stockDelta.get(product.id) || 0) + it.quantity);
+      }
+
+      const slipTotal = lineItems.reduce((s, l) => s + l.totalCost, 0);
+      const first = lineItems[0];
+      const now = new Date().toISOString();
+      const paidNow = paymentStatus === 'paid';
+
+      const record: ImportRecord = {
+        id,
+        productId: first.productId,
+        sku: first.sku,
+        name: lineItems.length > 1 ? `${first.name} (+${lineItems.length - 1})` : first.name,
+        quantity: lineItems.reduce((s, l) => s + l.quantity, 0),
+        unitCost: first.unitCost,
+        totalCost: slipTotal,
+        createdAt: now,
+        supplierName: supplier,
+        paidAmount: paidNow ? slipTotal : 0,
+        paymentStatus,
+        items: lineItems,
+      };
+      if (paidNow) record.lastPaidAt = now;
+
+      const paymentId = `PAY${id.replace(/[^a-zA-Z0-9]/g, '').slice(-10)}`;
+      const pay: PaymentRecord | null =
+        paidNow && slipTotal > 0
+          ? {
+              id: paymentId,
+              kind: 'payable',
+              importId: id,
+              amount: slipTotal,
+              method: 'cash',
+              createdAt: now,
+              supplierName: supplier,
+            }
+          : null;
+
+      const writeLocal = async () => {
+        let list: ImportRecord[] = [];
+        try {
+          const raw = localStorage.getItem(STORAGE_KEYS.IMPORTS);
+          list = raw ? JSON.parse(raw) : [];
+        } catch {
+          list = [];
+        }
+        if (list.some((i) => i.id === id)) return;
+        localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify([record, ...list]));
+        const latestProducts = await MockBackend.getProducts();
+        const newProducts = latestProducts.map((p) => {
+          const d = stockDelta.get(p.id);
+          if (!d) return p;
+          const snapshot = products.find((x) => x.id === p.id);
+          const target = (snapshot?.stock || 0) + d;
+          return { ...p, stock: target, importDate: now };
+        });
+        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(newProducts));
+        if (pay) {
+          const payments = await MockBackend.getPayments();
+          if (!payments.some((p) => p.id === pay.id)) {
+            localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([pay, ...payments]));
+          }
+        }
+      };
+
+      if (MockBackend.isOnlineMode()) {
+        try {
+          const updates: any = {};
+          updates['imports/' + id] = record;
+          for (const p of products) {
+            const d = stockDelta.get(p.id);
+            if (d) {
+              updates['products/' + p.id + '/stock'] = (p.stock || 0) + d;
+              updates['products/' + p.id + '/importDate'] = now;
+            }
+          }
+          if (pay) updates['payments/' + pay.id] = pay;
+          await withTimeout(update(ref(db), updates));
+          await writeLocal();
+        } catch (e) {
+          const afterFail = await lookupImport(id);
+          if (afterFail) return afterFail;
+          try {
+            await writeLocal();
+          } catch {
+            throw e;
+          }
+        }
+      } else {
+        await writeLocal();
+      }
+      return record;
+    } finally {
+      pendingImportIds.delete(id);
+    }
   },
   
   addOrderPayment: async (orderId: string, amount: number, method: PaymentRecord['method'], note?: string): Promise<PaymentRecord> => {
@@ -660,8 +765,9 @@ export const MockBackend = {
         throw new Error('Số tiền thanh toán vượt quá tổng phải trả');
       }
       const paid = paidBase + amount;
-      const payment: PaymentRecord = { id, kind: 'payable', importId, amount, method, createdAt: now, note, supplierName: imp.supplierName || imp.note };
-      return { payment, paid };
+      const paymentStatus = paid >= (imp.totalCost as number) ? 'paid' as const : 'unpaid' as const;
+      const payment: PaymentRecord = { id, kind: 'payable', importId, amount, method, createdAt: now, note, supplierName: imp.supplierName || 'Nhà cung cấp' };
+      return { payment, paid, paymentStatus };
     };
 
     // --- ONLINE (FIREBASE) PATH ---
@@ -673,17 +779,18 @@ export const MockBackend = {
         }
         const imp = (impSnap as any).val() as ImportRecord;
         const existingPayments = await MockBackend.getPayments();
-        const { payment, paid } = await doWriteWith({ imp, existingPayments });
+        const { payment, paid, paymentStatus } = await doWriteWith({ imp, existingPayments });
 
         const updates: any = {};
         updates[`payments/${id}`] = payment;
         updates[`imports/${importId}/paidAmount`] = paid;
         updates[`imports/${importId}/lastPaidAt`] = now;
+        updates[`imports/${importId}/paymentStatus`] = paymentStatus;
         await withTimeout(update(ref(db), updates));
 
         // Đồng bộ local storage
         const localImports = await MockBackend.getImports();
-        localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(localImports.map(i => i.id === importId ? { ...i, paidAmount: paid, lastPaidAt: now } : i)));
+        localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(localImports.map(i => i.id === importId ? { ...i, paidAmount: paid, lastPaidAt: now, paymentStatus } : i)));
         const localPayments = await MockBackend.getPayments();
         localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...localPayments.filter(p => p.id !== id)]));
         return payment;
@@ -697,8 +804,8 @@ export const MockBackend = {
     const imp = imports.find(i => i.id === importId);
     if (!imp) throw new Error('Phiếu nhập không tồn tại');
     const existingPayments = await MockBackend.getPayments();
-    const { payment, paid } = await doWriteWith({ imp, existingPayments });
-    localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(imports.map(i => i.id === importId ? { ...i, paidAmount: paid, lastPaidAt: now } : i)));
+    const { payment, paid, paymentStatus } = await doWriteWith({ imp, existingPayments });
+    localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(imports.map(i => i.id === importId ? { ...i, paidAmount: paid, lastPaidAt: now, paymentStatus } : i)));
     localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify([payment, ...existingPayments.filter(p => p.id !== id)]));
     return payment;
   },

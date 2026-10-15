@@ -1,4 +1,4 @@
-import { Order, ImportRecord, PaymentRecord, OrderStatus } from '../types';
+import { Order, ImportRecord, ImportLineItem, PaymentRecord, OrderStatus } from '../types';
 
 export type DebtStatus = 'unpaid' | 'partial' | 'paid';
 
@@ -78,7 +78,31 @@ export class DebtService {
       });
   }
 
+  static getImportLineItems(imp: ImportRecord): ImportLineItem[] {
+    if (Array.isArray(imp.items) && imp.items.length > 0) return imp.items;
+    return [
+      {
+        productId: imp.productId,
+        sku: imp.sku,
+        name: imp.name,
+        quantity: imp.quantity,
+        unitCost: imp.unitCost || 0,
+        totalCost:
+          typeof imp.totalCost === 'number'
+            ? imp.totalCost
+            : (imp.unitCost || 0) * (imp.quantity || 0),
+      },
+    ];
+  }
+
   static computePaidForImport(imp: ImportRecord, payments: PaymentRecord[]): number {
+    if (imp.paymentStatus === 'paid' && typeof imp.totalCost === 'number') {
+      const marked = typeof imp.paidAmount === 'number' ? Math.max(imp.paidAmount, imp.totalCost) : imp.totalCost;
+      const paidFromPayments = payments
+        .filter((p) => p.kind === 'payable' && p.importId === imp.id)
+        .reduce((s, p) => s + p.amount, 0);
+      return Math.max(paidFromPayments, marked);
+    }
     const paidFromPayments = payments
       .filter((p) => p.kind === 'payable' && p.importId === imp.id)
       .reduce((s, p) => s + p.amount, 0);
@@ -94,14 +118,14 @@ export class DebtService {
         const total = i.totalCost as number;
         return {
           id: i.id,
-          name: i.supplierName || i.note || 'Nhà cung cấp',
+          name: i.supplierName || 'Nhà cung cấp',
           total,
           paid,
           outstanding: Math.max(0, total - paid),
-          status: (paid <= 0
-            ? 'unpaid'
-            : paid >= total
-              ? 'paid'
+          status: (i.paymentStatus === 'paid' || paid >= total
+            ? 'paid'
+            : paid <= 0
+              ? 'unpaid'
               : 'partial') as DebtStatus,
         };
       });
@@ -296,7 +320,7 @@ export class DebtService {
         amount: (i.paidAmount || 0) - (actualPaidByImport.get(i.id) || 0),
         method: 'other' as const,
         createdAt: i.lastPaidAt || i.createdAt,
-        resolvedSupplierName: i.supplierName || i.note || 'Nhà cung cấp',
+        resolvedSupplierName: i.supplierName || 'Nhà cung cấp',
         isGap: true,
       }));
 
