@@ -108,7 +108,7 @@ export const Orders: React.FC = () => {
   };
   
   const handleDeleteOrder = async (orderId: string) => {
-    if (confirm('Bạn có chắc muốn xóa đơn này? Tồn kho sẽ được khôi phục.')) {
+    if (confirm('Bạn có chắc muốn xóa đơn này? Công nợ, phiếu thu và phiếu xuất kho liên quan sẽ được cập nhật. Tồn kho chỉ được khôi phục nếu đơn đã hoàn thành.')) {
       await MockBackend.deleteOrder(orderId);
       setOrders(prev => prev.filter(o => o.id !== orderId));
       await loadData();

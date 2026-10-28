@@ -23,6 +23,7 @@ import {
   Truck,
   ChevronRight,
   Calendar,
+  Trash2,
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { NumberInput } from '../components/NumberInput';
@@ -92,6 +93,7 @@ export const Debts: React.FC = () => {
   const [payAmount, setPayAmount] = useState(0);
   const [payMethod, setPayMethod] = useState<PaymentRecord['method']>('cash');
   const [saving, setSaving] = useState(false);
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
 
   // --- Chế độ xem theo khách hàng ---
   const [receivableViewMode, setReceivableViewMode] = useState<ReceivableViewMode>('byCustomer');
@@ -108,8 +110,8 @@ export const Debts: React.FC = () => {
   const [custDateFrom, setCustDateFrom] = useState('');
   const [custDateTo, setCustDateTo] = useState('');
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       const [bundle, custList] = await Promise.all([
         MockBackend.getDebtBundle(),
@@ -122,7 +124,7 @@ export const Debts: React.FC = () => {
     } catch (err) {
       console.error('Failed to load debt bundle:', err);
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   };
 
@@ -526,6 +528,50 @@ export const Debts: React.FC = () => {
     setCustomerDetailOpen(true);
   };
 
+  const handleDeleteReceivableOrder = async (orderId: string) => {
+    const order = orders.find((o) => o.id === orderId);
+    const paid = order ? DebtService.computePaidForOrder(order, payments) : 0;
+    const outstanding = order ? Math.max(0, order.totalAmount - paid) : 0;
+    const customerName = order?.customerName || 'khách hàng';
+    const ok = confirm(
+      `Xóa đơn ${orderId} của ${customerName}?\n\n` +
+        `Tổng đơn: ${formatMoney(order?.totalAmount || 0)} ₫\n` +
+        `Đã thu: ${formatMoney(paid)} ₫\n` +
+        `Còn nợ sẽ giảm: ${formatMoney(outstanding)} ₫\n\n` +
+        `Công nợ khách sẽ được tính lại. Phiếu thu và phiếu xuất kho gắn với đơn này cũng sẽ bị xóa khỏi cơ sở dữ liệu.`,
+    );
+    if (!ok) return;
+
+    setDeletingOrderId(orderId);
+    try {
+      await MockBackend.deleteOrder(orderId);
+      if (payContext?.orderId === orderId) setPayModalOpen(false);
+      setExpandedOrderIds((prev) => {
+        const next = new Set(prev);
+        next.delete(orderId);
+        return next;
+      });
+      await load({ silent: true });
+      const remaining = orders.filter(
+        (o) =>
+          o.id !== orderId &&
+          order &&
+          o.customerName === order.customerName &&
+          o.customerPhone === order.customerPhone &&
+          o.status !== OrderStatus.CANCELLED,
+      );
+      if (remaining.length === 0) {
+        setCustomerDetailOpen(false);
+        setSelectedCustomerKey(null);
+      }
+      showNotice(`Đã xóa đơn ${orderId}. Công nợ ${customerName} đã được cập nhật.`);
+    } catch (err: any) {
+      showNotice(err?.message || 'Không xóa được đơn hàng');
+    } finally {
+      setDeletingOrderId(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -783,13 +829,24 @@ export const Debts: React.FC = () => {
                         <td className="px-6 py-4 text-sm text-red-700 font-bold">{r.outstanding.toLocaleString()} ₫</td>
                         <td className="px-6 py-4 text-sm">{statusLabel(r.status)}</td>
                         <td className="px-6 py-4 text-right">
-                          <button
-                            onClick={() => openReceivablePay(r.id)}
-                            disabled={r.outstanding <= 0 || r.orderStatus !== OrderStatus.COMPLETED}
-                            className="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm disabled:opacity-50"
-                          >
-                            Thu tiền
-                          </button>
+                          <div className="inline-flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => openReceivablePay(r.id)}
+                              disabled={r.outstanding <= 0 || r.orderStatus !== OrderStatus.COMPLETED}
+                              className="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm disabled:opacity-50"
+                            >
+                              Thu tiền
+                            </button>
+                            <button
+                              onClick={() => handleDeleteReceivableOrder(r.id)}
+                              disabled={deletingOrderId === r.id}
+                              className="px-3 py-1.5 bg-red-50 text-red-700 border border-red-200 rounded hover:bg-red-100 text-sm disabled:opacity-50 inline-flex items-center gap-1"
+                              title="Xóa đơn hàng và cập nhật công nợ"
+                            >
+                              {deletingOrderId === r.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                              Xóa
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1458,6 +1515,18 @@ export const Debts: React.FC = () => {
                                     className="flex-1 md:flex-none px-3 py-1.5 text-xs font-bold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1 shadow-sm"
                                   >
                                     <Wallet size={12}/> Thu tiền
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeleteReceivableOrder(order.id);
+                                    }}
+                                    disabled={deletingOrderId === order.id}
+                                    className="flex-1 md:flex-none px-3 py-1.5 text-xs font-bold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                                    title="Xóa đơn hàng và cập nhật công nợ"
+                                  >
+                                    {deletingOrderId === order.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                                    Xóa
                                   </button>
                                   <button
                                     onClick={(e) => e.stopPropagation()}

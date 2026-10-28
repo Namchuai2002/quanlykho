@@ -1199,26 +1199,107 @@ export const MockBackend = {
   },
   
   deleteOrder: async (orderId: string) => {
+    const applyLocalDelete = (order: Order | null) => {
+      const readList = <T>(key: string): T[] => {
+        try {
+          const raw = localStorage.getItem(key);
+          const list = raw ? JSON.parse(raw) : [];
+          return Array.isArray(list) ? list : [];
+        } catch {
+          return [];
+        }
+      };
+
+      const ordersLocal = readList<Order>(STORAGE_KEYS.ORDERS);
+      localStorage.setItem(
+        STORAGE_KEYS.ORDERS,
+        JSON.stringify(ordersLocal.filter((o) => o.id !== orderId)),
+      );
+
+      const paymentsLocal = readList<PaymentRecord>(STORAGE_KEYS.PAYMENTS);
+      localStorage.setItem(
+        STORAGE_KEYS.PAYMENTS,
+        JSON.stringify(paymentsLocal.filter((p) => p.orderId !== orderId)),
+      );
+
+      const exportsLocal = readList<ExportRecord>(STORAGE_KEYS.EXPORTS);
+      localStorage.setItem(
+        STORAGE_KEYS.EXPORTS,
+        JSON.stringify(exportsLocal.filter((e) => e.orderId !== orderId)),
+      );
+
+      if (order?.status === OrderStatus.COMPLETED && Array.isArray(order.items)) {
+        const qtyByProduct = new Map<string, number>();
+        order.items.forEach((item) => {
+          if (!item?.productId) return;
+          qtyByProduct.set(item.productId, (qtyByProduct.get(item.productId) || 0) + (item.quantity || 0));
+        });
+        if (qtyByProduct.size > 0) {
+          const productsLocal = readList<Product>(STORAGE_KEYS.PRODUCTS);
+          const nextProducts = productsLocal.map((p) => {
+            const qty = qtyByProduct.get(p.id);
+            return qty ? { ...p, stock: (p.stock || 0) + qty } : p;
+          });
+          localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
+        }
+      }
+    };
+
+    const [payments, exportsList, products] = await Promise.all([
+      MockBackend.getPayments(),
+      MockBackend.getExports(),
+      MockBackend.getProducts(),
+    ]);
+    const relatedPayments = payments.filter((p) => p.kind === 'receivable' && p.orderId === orderId);
+    const relatedExports = exportsList.filter((e) => e.orderId === orderId);
+
     if (!MockBackend.isOnlineMode()) {
-      throw new Error('Chỉ hỗ trợ online');
+      const ordersLocal = await MockBackend.getOrders();
+      const order = ordersLocal.find((o) => o.id === orderId) || null;
+      applyLocalDelete(order);
+      return;
     }
+
     try {
       const orderSnap = await withTimeout(get(ref(db, `orders/${orderId}`)));
-      if (!orderSnap || !(orderSnap as any).exists || !(orderSnap as any).exists()) {
-        return;
-      }
-      const order = (orderSnap as any).val() as Order;
-      const products = await MockBackend.getProducts();
-      const updates: any = {};
+      const firebaseOrder =
+        orderSnap && (orderSnap as any).exists && (orderSnap as any).exists()
+          ? ((orderSnap as any).val() as Order)
+          : null;
+      const localOrders = await MockBackend.getOrders();
+      const order = firebaseOrder || localOrders.find((o) => o.id === orderId) || null;
+
+      const updates: Record<string, any> = {};
       updates[`orders/${orderId}`] = null;
-      order.items.forEach(item => {
-        const product = products.find(p => p.id === item.productId);
-        if (product) {
-          updates[`products/${product.id}/stock`] = product.stock + item.quantity;
-        }
+      relatedPayments.forEach((p) => {
+        updates[`payments/${p.id}`] = null;
       });
+      relatedExports.forEach((e) => {
+        updates[`exports/${e.id}`] = null;
+      });
+
+      // Chỉ hoàn kho khi đơn đã hoàn thành (khi đó mới trừ tồn và ghi phiếu xuất)
+      if (order?.status === OrderStatus.COMPLETED && Array.isArray(order.items)) {
+        const qtyByProduct = new Map<string, number>();
+        order.items.forEach((item) => {
+          if (!item?.productId) return;
+          qtyByProduct.set(item.productId, (qtyByProduct.get(item.productId) || 0) + (item.quantity || 0));
+        });
+        qtyByProduct.forEach((qty, productId) => {
+          const product = products.find((p) => p.id === productId);
+          if (product) updates[`products/${product.id}/stock`] = (product.stock || 0) + qty;
+        });
+      }
+
       await withTimeout(update(ref(db), updates));
+      applyLocalDelete(order);
     } catch (e) {
+      try {
+        const ordersLocal = await MockBackend.getOrders();
+        const order = ordersLocal.find((o) => o.id === orderId) || null;
+        applyLocalDelete(order);
+        return;
+      } catch {}
       throw e;
     }
   },
