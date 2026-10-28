@@ -977,7 +977,7 @@ export const MockBackend = {
     }
   },
 
-  createOrder: async (orderData: Omit<Order, 'id' | 'createdAt'>) => {
+  createOrder: async (orderData: Omit<Order, 'id' | 'createdAt'> & { createdAt?: string }) => {
     const products = await MockBackend.getProducts();
 
     // Check stock locally first
@@ -988,11 +988,13 @@ export const MockBackend = {
       }
     }
 
+    const createdAt = MockBackend.normalizeOrderDate(orderData.createdAt);
+
     const newOrderId = `DH${Date.now().toString().slice(-6)}`;
     const newOrder: Order = {
       ...orderData,
       id: newOrderId,
-      createdAt: new Date().toISOString(),
+      createdAt,
     };
 
     if (MockBackend.isOnlineMode()) {
@@ -1139,63 +1141,100 @@ export const MockBackend = {
     }
   },
 
+  normalizeOrderDate: (value?: string) => {
+    const raw = (value || '').trim();
+    const d = raw ? new Date(raw) : new Date();
+    if (Number.isNaN(d.getTime())) throw new Error('Ngày đơn hàng không hợp lệ');
+    return d.toISOString();
+  },
+
   updateOrder: async (
     orderId: string,
-    patch: Partial<Pick<Order, 'customerName' | 'customerPhone' | 'address' | 'totalAmount' | 'discountPercent'>> & {
+    patch: Partial<Pick<Order, 'customerName' | 'customerPhone' | 'address' | 'totalAmount' | 'discountPercent' | 'createdAt'>> & {
       items?: CartItem[];
     },
   ) => {
+    const applyCreatedAtSideEffects = (orderIdToSync: string, createdAt: string) => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.EXPORTS);
+        const list: ExportRecord[] = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(list) && list.some((e) => e.orderId === orderIdToSync)) {
+          localStorage.setItem(
+            STORAGE_KEYS.EXPORTS,
+            JSON.stringify(list.map((e) => (e.orderId === orderIdToSync ? { ...e, createdAt } : e))),
+          );
+        }
+      } catch {}
+    };
+
+    const patchLocalOrder = (merged: Order) => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.ORDERS);
+        const list: Order[] = raw ? JSON.parse(raw) : [];
+        const next = Array.isArray(list) ? list.slice() : [];
+        const idx = next.findIndex((o) => o.id === orderId);
+        if (idx >= 0) next[idx] = merged;
+        else next.unshift(merged);
+        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(next));
+      } catch {}
+    };
+
+    const buildSafePatch = (current: Order) => {
+      const safePatch: any = {};
+      if (typeof patch.customerName === 'string') safePatch.customerName = patch.customerName;
+      if (typeof patch.customerPhone === 'string') safePatch.customerPhone = patch.customerPhone;
+      if (typeof patch.address === 'string') safePatch.address = patch.address;
+      if (typeof patch.totalAmount === 'number') safePatch.totalAmount = patch.totalAmount;
+      if (typeof patch.discountPercent === 'number') safePatch.discountPercent = patch.discountPercent;
+      if (typeof patch.createdAt === 'string' && patch.createdAt.trim()) {
+        safePatch.createdAt = MockBackend.normalizeOrderDate(patch.createdAt);
+      }
+      if (patch.items && current.status !== OrderStatus.COMPLETED) {
+        safePatch.items = patch.items;
+      }
+      return safePatch;
+    };
+
     if (!MockBackend.isOnlineMode()) {
-      // Offline fallback: local-only update (items only if not completed)
       const ordersLocal = await MockBackend.getOrders();
       const idx = ordersLocal.findIndex(o => o.id === orderId);
       if (idx === -1) throw new Error('Đơn hàng không tồn tại');
       const current = ordersLocal[idx];
-      const safePatch: any = {
-        customerName: patch.customerName,
-        customerPhone: patch.customerPhone,
-        address: patch.address,
-        totalAmount: patch.totalAmount,
-        discountPercent: patch.discountPercent,
-      };
-      if (current.status !== OrderStatus.COMPLETED && patch.items) {
-        // Đơn chưa hoàn thành: cho phép sửa items (chưa bao giờ trừ kho nên không cần cập nhật stock)
-        safePatch.items = patch.items;
-      } else if (current.status === OrderStatus.COMPLETED && patch.items) {
-        // Đơn đã hoàn thành: chỉ cho sửa KH, không cho sửa items để tránh sai lệch kho/xuất kho
-        // (có thể xử lý delta nếu cần nhưng giữ đơn giản)
-      }
-      ordersLocal[idx] = { ...current, ...safePatch };
+      const safePatch = buildSafePatch(current);
+      const merged = { ...current, ...safePatch };
+      ordersLocal[idx] = merged;
       localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(ordersLocal));
-      return ordersLocal[idx];
+      if (safePatch.createdAt && safePatch.createdAt !== current.createdAt) {
+        applyCreatedAtSideEffects(orderId, safePatch.createdAt);
+      }
+      return merged;
     }
-    // Online path
+
     const orderSnap = await withTimeout(get(ref(db, `orders/${orderId}`)));
     if (!orderSnap || !(orderSnap as any).exists || !(orderSnap as any).exists()) {
       throw new Error('Đơn hàng không tồn tại');
     }
     const current = (orderSnap as any).val() as Order;
+    const safePatch = buildSafePatch(current);
+    const merged = { ...current, ...safePatch } as Order;
     const updates: any = {};
+    updates[`orders/${orderId}`] = merged;
 
-    const safePatch: any = {};
-    if (typeof patch.customerName === 'string') safePatch.customerName = patch.customerName;
-    if (typeof patch.customerPhone === 'string') safePatch.customerPhone = patch.customerPhone;
-    if (typeof patch.address === 'string') safePatch.address = patch.address;
-    if (typeof patch.totalAmount === 'number') safePatch.totalAmount = patch.totalAmount;
-    if (typeof patch.discountPercent === 'number') safePatch.discountPercent = patch.discountPercent;
-
-    if (patch.items && current.status !== OrderStatus.COMPLETED) {
-      // Chưa hoàn thành -> cho phép sửa items thoải mái (chưa bao giờ trừ kho, chưa ghi export record)
-      safePatch.items = patch.items;
+    if (safePatch.createdAt && safePatch.createdAt !== current.createdAt) {
+      const exportsList = await MockBackend.getExports();
+      exportsList
+        .filter((e) => e.orderId === orderId)
+        .forEach((e) => {
+          updates[`exports/${e.id}`] = { ...e, createdAt: safePatch.createdAt };
+        });
     }
 
-    updates[`orders/${orderId}`] = { ...current, ...safePatch };
-
-    // Nếu đơn đã COMPLETED và người dùng có sửa items -> bỏ qua items để tránh sai lệch
-    // (khi có yêu cầu mạnh mẽ hơn thì xử lý delta export/stock riêng)
-
     await withTimeout(update(ref(db), updates));
-    return { ...current, ...safePatch } as Order;
+    patchLocalOrder(merged);
+    if (safePatch.createdAt && safePatch.createdAt !== current.createdAt) {
+      applyCreatedAtSideEffects(orderId, safePatch.createdAt);
+    }
+    return merged;
   },
   
   deleteOrder: async (orderId: string) => {

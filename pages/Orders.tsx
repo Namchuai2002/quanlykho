@@ -1,9 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { MockBackend } from '../services/mockBackend';
 import { Order, OrderStatus, Product, CartItem, Customer } from '../types';
-import { Search, Plus, Eye, CheckCircle, Truck, XCircle, Clock, Loader2, Edit2, Trash2, Printer } from 'lucide-react';
+import { Search, Plus, Eye, CheckCircle, Truck, XCircle, Clock, Loader2, Edit2, Trash2, Printer, Calendar } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { NumberInput } from '../components/NumberInput';
+
+const toDateTimeLocal = (iso?: string) => {
+  const d = iso ? new Date(iso) : new Date();
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
 
 export const Orders: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -31,6 +38,7 @@ export const Orders: React.FC = () => {
   const [newOrderLinePrice, setNewOrderLinePrice] = useState(0);
   const [discountPercent, setDiscountPercent] = useState(0);
   const [newOrderLineDiscount, setNewOrderLineDiscount] = useState(0);
+  const [orderDate, setOrderDate] = useState(toDateTimeLocal());
 
   const loadData = async () => {
     setLoading(true);
@@ -536,6 +544,7 @@ export const Orders: React.FC = () => {
           address: newOrderCustomer.address,
           totalAmount: totals.paymentTotal,
           discountPercent: totals.discountPercent,
+          createdAt: orderDate,
           items: cart,
         });
         if (!selectedCustomerId && saveNewCustomer) {
@@ -550,6 +559,7 @@ export const Orders: React.FC = () => {
           totalAmount: totals.paymentTotal,
           status: OrderStatus.PENDING,
           discountPercent: totals.discountPercent,
+          createdAt: orderDate,
           items: cart,
         });
         if (!selectedCustomerId && saveNewCustomer) {
@@ -565,6 +575,7 @@ export const Orders: React.FC = () => {
       setNewOrderCustomer({ name: '', phone: '', address: '' });
       setCart([]);
       setDiscountPercent(0);
+      setOrderDate(toDateTimeLocal());
       setIsModalOpen(false);
     } catch (error: any) {
       alert(error.message);
@@ -589,6 +600,7 @@ export const Orders: React.FC = () => {
             setNewOrderLinePrice(0);
             setNewOrderLineDiscount(0);
             setDiscountPercent(0);
+            setOrderDate(toDateTimeLocal());
             setIsModalOpen(true);
           }}
           className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2 shadow-sm transition-all"
@@ -662,7 +674,7 @@ export const Orders: React.FC = () => {
                     <p className="text-xs text-gray-500">{order.address}</p>
                     </td>
                     <td className="px-6 py-4 text-right font-bold text-gray-800">{order.totalAmount.toLocaleString()} ₫</td>
-                    <td className="px-6 py-4 text-sm text-gray-500">{new Date(order.createdAt).toLocaleDateString('vi-VN')}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500">{new Date(order.createdAt).toLocaleString('vi-VN')}</td>
                     <td className="px-6 py-4">{getStatusBadge(order.status)}</td>
                     <td className="px-6 py-4 text-right">
                       <button
@@ -674,7 +686,7 @@ export const Orders: React.FC = () => {
                       </button>
                       <button
                         className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md mr-2"
-                        title={order.status === OrderStatus.COMPLETED ? 'Đơn đã hoàn thành, chỉ có thể sửa thông tin khách hàng' : 'Sửa đơn hàng'}
+                        title={order.status === OrderStatus.COMPLETED ? 'Đơn đã hoàn thành: có thể sửa khách hàng và ngày đơn' : 'Sửa đơn hàng'}
                         onClick={() => {
                           setEditingOrder(order);
                           setNewOrderCustomer({
@@ -688,6 +700,7 @@ export const Orders: React.FC = () => {
                             discountPercent: it.discountPercent ?? 0,
                           })));
                           setDiscountPercent(Math.max(0, Math.min(100, order.discountPercent ?? 0)));
+                          setOrderDate(toDateTimeLocal(order.createdAt));
                           setSelectedCustomerId('');
                           setSelectedProductId('');
                           setNewOrderQuantity(1);
@@ -797,6 +810,7 @@ export const Orders: React.FC = () => {
           setNewOrderLinePrice(0);
           setNewOrderLineDiscount(0);
           setDiscountPercent(0);
+          setOrderDate(toDateTimeLocal());
         }}
         maxWidthClass="max-w-4xl"
         title={editingOrder ? `Chỉnh sửa đơn hàng ${editingOrder.id}` : 'Tạo Đơn Hàng Mới'}
@@ -845,6 +859,25 @@ export const Orders: React.FC = () => {
             </div>
 
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Ngày đơn hàng <span className="text-red-500">*</span>
+              </label>
+              <div className="relative max-w-sm">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <input
+                  required
+                  type="datetime-local"
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                  value={orderDate}
+                  onChange={(e) => setOrderDate(e.target.value)}
+                />
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Doanh thu, công nợ và báo cáo sẽ tính theo ngày này. Có thể sửa cả đơn đã hoàn thành.
+              </p>
+            </div>
+
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Chọn Khách Hàng Có Sẵn</label>
               <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
                 <select
@@ -882,7 +915,7 @@ export const Orders: React.FC = () => {
               Danh Sách Sản Phẩm
               {editingOrder?.status === OrderStatus.COMPLETED && (
                 <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800">
-                  ⚠ Đơn đã hoàn thành - chỉ sửa được thông tin khách
+                  ⚠ Đơn đã hoàn thành — vẫn sửa được khách hàng và ngày đơn; không sửa sản phẩm
                 </span>
               )}
             </h4>
@@ -1355,6 +1388,7 @@ export const Orders: React.FC = () => {
               <p className="font-semibold text-gray-800 mt-2">{detailOrder.customerName}</p>
               <p className="text-sm text-gray-600">📞 {detailOrder.customerPhone}</p>
               <p className="text-sm text-gray-600">📍 {detailOrder.address}</p>
+              <p className="text-sm text-gray-600 mt-2">📅 {new Date(detailOrder.createdAt).toLocaleString('vi-VN')}</p>
             </div>
 
             <div className="border border-gray-200 rounded-xl overflow-hidden">

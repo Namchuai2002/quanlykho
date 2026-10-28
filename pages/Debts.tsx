@@ -74,6 +74,13 @@ const payStatusBadge = (s: PayStatus | undefined) => {
 
 const formatMoney = (n: number) => Math.round(n || 0).toLocaleString('vi-VN');
 
+const toDateTimeLocal = (iso?: string) => {
+  const d = iso ? new Date(iso) : new Date();
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 export const Debts: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [imports, setImports] = useState<ImportRecord[]>([]);
@@ -94,6 +101,10 @@ export const Debts: React.FC = () => {
   const [payMethod, setPayMethod] = useState<PaymentRecord['method']>('cash');
   const [saving, setSaving] = useState(false);
   const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
+  const [dateModalOpen, setDateModalOpen] = useState(false);
+  const [dateEditOrder, setDateEditOrder] = useState<Order | null>(null);
+  const [dateEditValue, setDateEditValue] = useState('');
+  const [savingDate, setSavingDate] = useState(false);
 
   // --- Chế độ xem theo khách hàng ---
   const [receivableViewMode, setReceivableViewMode] = useState<ReceivableViewMode>('byCustomer');
@@ -528,6 +539,34 @@ export const Debts: React.FC = () => {
     setCustomerDetailOpen(true);
   };
 
+  const openOrderDateEdit = (orderId: string) => {
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) {
+      showNotice('Đơn hàng không tồn tại');
+      return;
+    }
+    setDateEditOrder(order);
+    setDateEditValue(toDateTimeLocal(order.createdAt));
+    setDateModalOpen(true);
+  };
+
+  const submitOrderDateEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!dateEditOrder) return;
+    setSavingDate(true);
+    try {
+      await MockBackend.updateOrder(dateEditOrder.id, { createdAt: dateEditValue });
+      setDateModalOpen(false);
+      setDateEditOrder(null);
+      await load({ silent: true });
+      showNotice(`Đã cập nhật ngày đơn ${dateEditOrder.id}. Doanh thu và công nợ đã tính lại theo ngày mới.`);
+    } catch (err: any) {
+      showNotice(err?.message || 'Không cập nhật được ngày đơn hàng');
+    } finally {
+      setSavingDate(false);
+    }
+  };
+
   const handleDeleteReceivableOrder = async (orderId: string) => {
     const order = orders.find((o) => o.id === orderId);
     const paid = order ? DebtService.computePaidForOrder(order, payments) : 0;
@@ -836,6 +875,14 @@ export const Debts: React.FC = () => {
                               className="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm disabled:opacity-50"
                             >
                               Thu tiền
+                            </button>
+                            <button
+                              onClick={() => openOrderDateEdit(r.id)}
+                              className="px-3 py-1.5 bg-white text-gray-700 border border-gray-200 rounded hover:bg-gray-50 text-sm inline-flex items-center gap-1"
+                              title="Sửa ngày đơn hàng"
+                            >
+                              <Calendar size={14} />
+                              Ngày
                             </button>
                             <button
                               onClick={() => handleDeleteReceivableOrder(r.id)}
@@ -1515,6 +1562,16 @@ export const Debts: React.FC = () => {
                                     className="flex-1 md:flex-none px-3 py-1.5 text-xs font-bold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1 shadow-sm"
                                   >
                                     <Wallet size={12}/> Thu tiền
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openOrderDateEdit(order.id);
+                                    }}
+                                    className="flex-1 md:flex-none px-3 py-1.5 text-xs font-bold text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center justify-center gap-1"
+                                    title="Sửa ngày đơn hàng"
+                                  >
+                                    <Calendar size={12}/> Ngày
                                   </button>
                                   <button
                                     onClick={(e) => {
