@@ -73,6 +73,16 @@ export const Inventory: React.FC = () => {
   const [supplierSlipSearch, setSupplierSlipSearch] = useState('');
   const [supplierSlipStatus, setSupplierSlipStatus] = useState<'all' | PayStatus>('all');
 
+  // --- Chỉnh sửa phiếu nhập ---
+  const [isEditingImport, setIsEditingImport] = useState(false);
+  const [importDateValue, setImportDateValue] = useState('');
+  const [importNote, setImportNote] = useState('');
+
+  // --- Bộ lọc nhà cung cấp / ngày nhập ---
+  const [importSupplierFilter, setImportSupplierFilter] = useState('');
+  const [importDateFrom, setImportDateFrom] = useState('');
+  const [importDateTo, setImportDateTo] = useState('');
+
   // Category Manage Input
   const [newCategoryName, setNewCategoryName] = useState('');
 
@@ -230,6 +240,36 @@ export const Inventory: React.FC = () => {
   
   const formatMoney = (n: number) => Math.round(n || 0).toLocaleString('vi-VN');
 
+  const toDatetimeLocal = (iso?: string) => {
+    const d = iso ? new Date(iso) : new Date();
+    if (Number.isNaN(d.getTime())) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const withinDateRange = (iso: string) => {
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return true;
+    if (importDateFrom && t < new Date(`${importDateFrom}T00:00:00`).getTime()) return false;
+    if (importDateTo && t > new Date(`${importDateTo}T23:59:59`).getTime()) return false;
+    return true;
+  };
+
+  const hasImportFilter =
+    !!importListSearch.trim() ||
+    importListStatus !== 'all' ||
+    !!importSupplierFilter.trim() ||
+    !!importDateFrom ||
+    !!importDateTo;
+
+  const resetImportFilters = () => {
+    setImportListSearch('');
+    setImportListStatus('all');
+    setImportSupplierFilter('');
+    setImportDateFrom('');
+    setImportDateTo('');
+  };
+
   const newImportRequestId = () =>
     `IMP${Date.now().toString().slice(-8)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -279,6 +319,9 @@ export const Inventory: React.FC = () => {
     setImportLines([]);
     setImportFormError('');
     setViewingImport(null);
+    setIsEditingImport(false);
+    setImportDateValue('');
+    setImportNote('');
     setImportRequestId(newImportRequestId());
     setImportPickerSearch('');
     setImportPickerCategory('');
@@ -299,6 +342,9 @@ export const Inventory: React.FC = () => {
   const closeImportModal = () => {
     setIsImportModalOpen(false);
     setViewingImport(null);
+    setIsEditingImport(false);
+    setImportNote('');
+    setImportDateValue('');
     setImportFormError('');
     importSubmittingRef.current = false;
     if (supplierReturnKey) {
@@ -310,6 +356,7 @@ export const Inventory: React.FC = () => {
 
   const openImportSlip = (imp: ImportRecord) => {
     setViewingImport(imp);
+    setIsEditingImport(false);
     const paid = DebtService.computePaidForImport(imp, payments);
     const total = typeof imp.totalCost === 'number' ? imp.totalCost : 0;
     const inferred: ImportPaymentStatus =
@@ -326,12 +373,20 @@ export const Inventory: React.FC = () => {
         tempId: `${imp.id}_${idx}`,
       })),
     );
+    setImportDateValue(toDatetimeLocal(imp.createdAt));
+    setImportNote(imp.note || '');
     setImportFormError('');
     setIsImportModalOpen(true);
   };
 
+  const openEditImport = (imp: ImportRecord) => {
+    openImportSlip(imp);
+    setIsEditingImport(true);
+    setImportFormError('');
+  };
+
   const importSlipPreview = useMemo(() => {
-    if (viewingImport) {
+    if (viewingImport && !isEditingImport) {
       const total = typeof viewingImport.totalCost === 'number'
         ? viewingImport.totalCost
         : importLines.reduce((s, l) => s + l.totalCost, 0);
@@ -341,7 +396,7 @@ export const Inventory: React.FC = () => {
     const total = importLines.reduce((s, l) => s + l.totalCost, 0);
     const paid = importForm.paymentStatus === 'paid' ? total : 0;
     return { total, paid, outstanding: Math.max(0, total - paid), count: importLines.length };
-  }, [importLines, importForm.paymentStatus, viewingImport, payments]);
+  }, [importLines, importForm.paymentStatus, viewingImport, isEditingImport, payments]);
 
   const openSupplierDetail = (group: SupplierImportGroup) => {
     setSelectedSupplierKey(group.key);
@@ -356,6 +411,12 @@ export const Inventory: React.FC = () => {
     setSupplierReturnKey(selectedSupplierKey);
     setSupplierDetailOpen(false);
     openImportSlip(imp);
+  };
+
+  const openEditImportFromSupplier = (imp: ImportRecord) => {
+    setSupplierReturnKey(selectedSupplierKey);
+    setSupplierDetailOpen(false);
+    openEditImport(imp);
   };
 
   const supplierGroups: SupplierImportGroup[] = useMemo(() => {
@@ -426,7 +487,7 @@ export const Inventory: React.FC = () => {
 
   const handleImportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (viewingImport) return;
+    if (viewingImport && !isEditingImport) return;
     if (saving || importSubmittingRef.current) return;
 
     const errors: string[] = [];
@@ -434,6 +495,7 @@ export const Inventory: React.FC = () => {
     if (importForm.paymentStatus !== 'paid' && importForm.paymentStatus !== 'unpaid') {
       errors.push('Vui lòng chọn trạng thái thanh toán (Đã thanh toán hoặc Chưa thanh toán)');
     }
+    if (isEditingImport && !importDateValue) errors.push('Vui lòng chọn ngày nhập');
     if (importLines.length === 0) errors.push('Vui lòng chọn hàng hóa');
     importLines.forEach((l, i) => {
       if (!Number.isFinite(l.quantity) || l.quantity <= 0) {
@@ -452,6 +514,25 @@ export const Inventory: React.FC = () => {
     setSaving(true);
     setImportFormError('');
     try {
+      if (isEditingImport && viewingImport) {
+        const updated = await MockBackend.editImport(viewingImport.id, {
+          supplierName: importForm.supplierName.trim(),
+          createdAt: new Date(importDateValue).toISOString(),
+          paymentStatus: importForm.paymentStatus as ImportPaymentStatus,
+          note: importNote.trim(),
+          items: importLines.map((l) => ({
+            productId: l.productId,
+            quantity: l.quantity,
+            unitCost: l.unitCost,
+          })),
+        });
+        await loadData();
+        closeImportModal();
+        setNotice(`Đã cập nhật phiếu nhập ${updated.id}`);
+        setTimeout(() => setNotice(''), 3000);
+        return;
+      }
+
       const record = await MockBackend.importStock({
         requestId: importRequestId || newImportRequestId(),
         supplierName: importForm.supplierName.trim(),
@@ -468,7 +549,9 @@ export const Inventory: React.FC = () => {
       setNotice(`Đã nhập phiếu ${record.id}: +${qty} sản phẩm`);
       setTimeout(() => setNotice(''), 3000);
     } catch (err: any) {
-      setImportFormError(err?.message || 'Lỗi nhập hàng. Vui lòng thử lại.');
+      setImportFormError(
+        err?.message || (isEditingImport ? 'Cập nhật phiếu nhập thất bại. Vui lòng thử lại.' : 'Lỗi nhập hàng. Vui lòng thử lại.'),
+      );
     } finally {
       importSubmittingRef.current = false;
       setSaving(false);
@@ -907,14 +990,14 @@ export const Inventory: React.FC = () => {
       <Modal 
         isOpen={isImportModalOpen} 
         onClose={closeImportModal} 
-        title={viewingImport ? `Phiếu nhập ${viewingImport.id}` : 'Nhập Hàng'}
+        title={isEditingImport && viewingImport ? `Sửa phiếu nhập ${viewingImport.id}` : viewingImport ? `Phiếu nhập ${viewingImport.id}` : 'Nhập Hàng'}
         maxWidthClass="max-w-6xl"
       >
         <form onSubmit={handleImportSubmit} className="space-y-6">
           <div className="flex flex-col lg:flex-row lg:items-center gap-3">
             <div className="bg-white border border-gray-200 rounded-lg p-1 flex">
               <span className="px-4 py-2 rounded-md text-sm font-semibold flex items-center gap-1.5 bg-indigo-600 text-white shadow-sm">
-                <FileText size={15}/> {viewingImport ? 'Chi tiết phiếu' : 'Phiếu nhập mới'}
+                <FileText size={15}/> {isEditingImport ? 'Sửa phiếu nhập' : viewingImport ? 'Chi tiết phiếu' : 'Phiếu nhập mới'}
               </span>
             </div>
             <div className="flex-1">
@@ -923,10 +1006,10 @@ export const Inventory: React.FC = () => {
               </label>
               <input
                 placeholder="Tìm / nhập tên nhà cung cấp..."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg disabled:bg-gray-50 disabled:text-gray-600"
                 value={importForm.supplierName}
                 onChange={(e) => setImportForm({ ...importForm, supplierName: e.target.value })}
-                disabled={!!viewingImport}
+                disabled={!!viewingImport && !isEditingImport}
               />
             </div>
             <div>
@@ -939,7 +1022,7 @@ export const Inventory: React.FC = () => {
                     type="checkbox"
                     className="w-4 h-4 accent-indigo-600"
                     checked={importForm.paymentStatus === 'paid'}
-                    disabled={!!viewingImport}
+                    disabled={!!viewingImport && !isEditingImport}
                     onChange={() => {
                       setImportForm((prev) => ({ ...prev, paymentStatus: 'paid' }));
                       setImportFormError('');
@@ -952,7 +1035,7 @@ export const Inventory: React.FC = () => {
                     type="checkbox"
                     className="w-4 h-4 accent-indigo-600"
                     checked={importForm.paymentStatus === 'unpaid'}
-                    disabled={!!viewingImport}
+                    disabled={!!viewingImport && !isEditingImport}
                     onChange={() => {
                       setImportForm((prev) => ({ ...prev, paymentStatus: 'unpaid' }));
                       setImportFormError('');
@@ -963,6 +1046,34 @@ export const Inventory: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {viewingImport && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1.5">
+                  <Calendar size={13}/> Ngày nhập
+                </label>
+                <input
+                  type="datetime-local"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg disabled:bg-gray-50 disabled:text-gray-600"
+                  value={importDateValue}
+                  onChange={(e) => setImportDateValue(e.target.value)}
+                  disabled={!isEditingImport}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Ghi chú</label>
+                <textarea
+                  rows={1}
+                  placeholder="Ghi chú phiếu nhập..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg resize-none disabled:bg-gray-50 disabled:text-gray-600"
+                  value={importNote}
+                  onChange={(e) => setImportNote(e.target.value)}
+                  disabled={!isEditingImport}
+                />
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-white border border-gray-200 rounded p-4">
@@ -983,7 +1094,7 @@ export const Inventory: React.FC = () => {
             </div>
           </div>
 
-          {!viewingImport && (
+          {(!viewingImport || isEditingImport) && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="px-5 py-3 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-blue-50 flex items-center justify-between">
                 <p className="text-sm font-bold text-indigo-900">CHỌN HÀNG HÓA</p>
@@ -1049,7 +1160,7 @@ export const Inventory: React.FC = () => {
                     <th className="px-6 py-4 text-right">Số lượng</th>
                     <th className="px-6 py-4 text-right">Giá nhập</th>
                     <th className="px-6 py-4 text-right">Thành tiền</th>
-                    {!viewingImport && <th className="px-6 py-4 text-right">Thao tác</th>}
+                    {(!viewingImport || isEditingImport) && <th className="px-6 py-4 text-right">Thao tác</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -1058,7 +1169,7 @@ export const Inventory: React.FC = () => {
                       <td className="px-6 py-4 text-sm font-medium text-gray-800">{l.name}</td>
                       <td className="px-6 py-4 text-sm text-gray-700">{l.sku}</td>
                       <td className="px-6 py-4 text-right">
-                        {viewingImport ? (
+                        {viewingImport && !isEditingImport ? (
                           <span className="text-sm font-semibold">{l.quantity}</span>
                         ) : (
                           <NumberInput
@@ -1070,7 +1181,7 @@ export const Inventory: React.FC = () => {
                         )}
                       </td>
                       <td className="px-6 py-4 text-right">
-                        {viewingImport ? (
+                        {viewingImport && !isEditingImport ? (
                           <span className="text-sm">{formatMoney(l.unitCost)} ₫</span>
                         ) : (
                           <NumberInput
@@ -1085,7 +1196,7 @@ export const Inventory: React.FC = () => {
                       <td className="px-6 py-4 text-right text-sm font-semibold text-gray-800">
                         {formatMoney(l.totalCost)} ₫
                       </td>
-                      {!viewingImport && (
+                      {(!viewingImport || isEditingImport) && (
                         <td className="px-6 py-4 text-right">
                           <button
                             type="button"
@@ -1100,7 +1211,7 @@ export const Inventory: React.FC = () => {
                   ))}
                   {importLines.length === 0 && (
                     <tr>
-                      <td colSpan={viewingImport ? 5 : 6} className="px-6 py-12 text-center text-gray-400">
+                      <td colSpan={!viewingImport || isEditingImport ? 6 : 5} className="px-6 py-12 text-center text-gray-400">
                         Chưa chọn hàng hóa.
                       </td>
                     </tr>
@@ -1122,16 +1233,25 @@ export const Inventory: React.FC = () => {
               onClick={closeImportModal}
               className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
             >
-              {viewingImport ? 'Đóng' : 'Hủy'}
+              {viewingImport && !isEditingImport ? 'Đóng' : 'Hủy'}
             </button>
-            {!viewingImport && (
+            {viewingImport && !isEditingImport ? (
+              <button
+                type="button"
+                onClick={() => viewingImport && openEditImport(viewingImport)}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-2"
+              >
+                <Edit2 size={16} />
+                Sửa phiếu nhập
+              </button>
+            ) : (
               <button
                 type="submit"
                 disabled={saving}
                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-50"
               >
                 {saving && <Loader2 className="animate-spin" size={16} />}
-                {saving ? 'Đang lưu...' : 'Xác nhận nhập hàng'}
+                {saving ? 'Đang lưu...' : isEditingImport ? 'Lưu thay đổi' : 'Xác nhận nhập hàng'}
               </button>
             )}
           </div>
@@ -1377,6 +1497,10 @@ export const Inventory: React.FC = () => {
           if (paid > 0) return 'partial';
           return 'unpaid';
         };
+        const supFilter = importSupplierFilter.trim().toLowerCase();
+        const inDateRangeIds = new Set(
+          imports.filter((imp) => withinDateRange(imp.createdAt)).map((imp) => imp.id),
+        );
         const filteredSlips = imports.filter((imp) => {
           const status = slipStatusOf(imp);
           const matchSearch =
@@ -1387,7 +1511,9 @@ export const Inventory: React.FC = () => {
               (l) => l.name.toLowerCase().includes(s) || l.sku.toLowerCase().includes(s),
             );
           const matchStatus = importListStatus === 'all' ? true : status === importListStatus;
-          return matchSearch && matchStatus;
+          const matchSupplier = !supFilter || (imp.supplierName || '').toLowerCase().includes(supFilter);
+          const matchDate = withinDateRange(imp.createdAt);
+          return matchSearch && matchStatus && matchSupplier && matchDate;
         });
         const filteredSuppliers = supplierGroups.filter((g) => {
           const matchSearch =
@@ -1401,12 +1527,14 @@ export const Inventory: React.FC = () => {
             );
           const groupStatus: PayStatus = g.outstanding <= 0 ? 'paid' : g.paid <= 0 ? 'unpaid' : 'partial';
           const matchStatus = importListStatus === 'all' ? true : groupStatus === importListStatus;
-          return matchSearch && matchStatus;
+          const matchSupplier = !supFilter || g.name.toLowerCase().includes(supFilter);
+          const matchDate = g.importIds.some((id) => inDateRangeIds.has(id));
+          return matchSearch && matchStatus && matchSupplier && matchDate;
         });
         const summary = DebtService.computePayableSummary(payables);
         return (
           <div className="space-y-4">
-            <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3 bg-white border border-gray-200 rounded-lg p-3">
               <div className="bg-white border border-gray-200 rounded-lg p-1 flex">
                 <button
                   type="button"
@@ -1430,11 +1558,20 @@ export const Inventory: React.FC = () => {
               <input
                 placeholder={importViewMode === 'bySupplier'
                   ? 'Tìm theo tên người nhập, mã phiếu, hàng hóa...'
-                  : 'Tìm theo nhà cung cấp, mã phiếu, hàng hóa...'}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg"
+                  : 'Tìm theo mã phiếu, hàng hóa...'}
+                className="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg"
                 value={importListSearch}
                 onChange={(e) => setImportListSearch(e.target.value)}
               />
+              <div className="relative min-w-[200px] flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16}/>
+                <input
+                  placeholder="Lọc theo nhà cung cấp..."
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg"
+                  value={importSupplierFilter}
+                  onChange={(e) => setImportSupplierFilter(e.target.value)}
+                />
+              </div>
               <select
                 className="px-3 py-2 border border-gray-300 rounded-lg"
                 value={importListStatus}
@@ -1445,6 +1582,33 @@ export const Inventory: React.FC = () => {
                 <option value="partial">Còn nợ một phần</option>
                 <option value="paid">Đã thanh toán</option>
               </select>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 whitespace-nowrap">Từ ngày</span>
+                <input
+                  type="date"
+                  className="px-3 py-2 border border-gray-300 rounded-lg"
+                  value={importDateFrom}
+                  onChange={(e) => setImportDateFrom(e.target.value)}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 whitespace-nowrap">Đến ngày</span>
+                <input
+                  type="date"
+                  className="px-3 py-2 border border-gray-300 rounded-lg"
+                  value={importDateTo}
+                  onChange={(e) => setImportDateTo(e.target.value)}
+                />
+              </div>
+              {hasImportFilter && (
+                <button
+                  type="button"
+                  onClick={resetImportFilters}
+                  className="px-3 py-2 text-sm font-semibold text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 flex items-center gap-1.5"
+                >
+                  <X size={15}/> Xóa bộ lọc
+                </button>
+              )}
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="bg-white border border-gray-200 rounded p-4">
@@ -1595,13 +1759,22 @@ export const Inventory: React.FC = () => {
                               {new Date(imp.createdAt).toLocaleDateString('vi-VN')}
                             </td>
                             <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                onClick={() => openImportSlip(imp)}
-                                className="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
-                              >
-                                Xem
-                              </button>
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => openImportSlip(imp)}
+                                  className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm"
+                                >
+                                  Xem
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openEditImport(imp)}
+                                  className="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm flex items-center gap-1"
+                                >
+                                  <Edit2 size={14} /> Sửa
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1944,7 +2117,14 @@ export const Inventory: React.FC = () => {
                                       </tbody>
                                     </table>
                                   </div>
-                                  <div className="flex justify-end">
+                                  <div className="flex justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => openEditImportFromSupplier(imp)}
+                                      className="px-4 py-2 bg-white border border-indigo-200 text-indigo-700 rounded-lg hover:bg-indigo-50 text-sm font-semibold flex items-center gap-1.5"
+                                    >
+                                      <Edit2 size={14}/> Sửa phiếu
+                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => openImportSlipFromSupplier(imp)}

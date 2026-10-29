@@ -1,4 +1,4 @@
-import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ImportLineItem, ImportStockPayload, ExportRecord, PaymentRecord, CartItem } from '../types';
+import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ImportLineItem, ImportStockPayload, ImportPaymentStatus, ExportRecord, PaymentRecord, CartItem } from '../types';
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, get, set, child, update, push } from 'firebase/database';
 
@@ -857,6 +857,202 @@ export const MockBackend = {
     await withTimeout(update(ref(db), updates));
     patchLocal(merged);
     return merged;
+  },
+
+  // Chỉnh sửa toàn bộ phiếu nhập: NCC, ngày nhập, hàng hóa, số lượng, đơn giá, ghi chú, trạng thái TT.
+  // Tồn kho được điều chỉnh theo chênh lệch (delta) để tránh cộng/trừ trùng lặp; công nợ được đối soát lại.
+  editImport: async (
+    importId: string,
+    payload: {
+      supplierName: string;
+      createdAt: string;
+      paymentStatus: ImportPaymentStatus;
+      note?: string;
+      items: { productId: string; quantity: number; unitCost: number }[];
+    },
+  ): Promise<ImportRecord> => {
+    const supplier = (payload?.supplierName || '').trim();
+    const paymentStatus = payload?.paymentStatus;
+    const rawItems = Array.isArray(payload?.items) ? payload.items : [];
+    const note = typeof payload?.note === 'string' ? payload.note.trim() : '';
+
+    if (!supplier) throw new Error('Vui lòng nhập nhà cung cấp');
+    if (paymentStatus !== 'paid' && paymentStatus !== 'unpaid') {
+      throw new Error('Vui lòng chọn trạng thái thanh toán (Đã thanh toán hoặc Chưa thanh toán)');
+    }
+    if (rawItems.length === 0) throw new Error('Vui lòng chọn hàng hóa');
+
+    const createdDate = payload?.createdAt ? new Date(payload.createdAt) : new Date();
+    if (Number.isNaN(createdDate.getTime())) throw new Error('Ngày nhập không hợp lệ');
+    const createdAtISO = createdDate.toISOString();
+
+    const mergedQty = new Map<string, { quantity: number; unitCost: number }>();
+    for (const it of rawItems) {
+      if (!it?.productId) throw new Error('Thiếu mã hàng hóa');
+      if (!Number.isFinite(it.quantity) || it.quantity <= 0) {
+        throw new Error('Số lượng nhập phải lớn hơn 0');
+      }
+      if (!Number.isFinite(it.unitCost) || it.unitCost < 0) {
+        throw new Error('Giá nhập không hợp lệ');
+      }
+      const q = Math.floor(it.quantity);
+      const c = Math.floor(it.unitCost);
+      const cur = mergedQty.get(it.productId);
+      if (cur) mergedQty.set(it.productId, { quantity: cur.quantity + q, unitCost: c });
+      else mergedQty.set(it.productId, { quantity: q, unitCost: c });
+    }
+
+    const imports = await MockBackend.getImports();
+    const current = imports.find((i) => i.id === importId);
+    if (!current) throw new Error('Phiếu nhập không tồn tại');
+
+    const products = await MockBackend.getProducts();
+
+    const lineItems: ImportLineItem[] = [];
+    const newQtyByProduct = new Map<string, number>();
+    for (const [productId, it] of mergedQty.entries()) {
+      const product = products.find((p) => p.id === productId);
+      if (!product) throw new Error('Sản phẩm không tồn tại trong hệ thống');
+      const totalCost = it.unitCost * it.quantity;
+      lineItems.push({
+        productId: product.id,
+        sku: product.sku,
+        name: product.name,
+        quantity: it.quantity,
+        unitCost: it.unitCost,
+        totalCost,
+      });
+      newQtyByProduct.set(product.id, (newQtyByProduct.get(product.id) || 0) + it.quantity);
+    }
+
+    const qtyByProductOf = (imp: ImportRecord): Map<string, number> => {
+      const map = new Map<string, number>();
+      const items = Array.isArray(imp.items) && imp.items.length > 0 ? imp.items : null;
+      if (items) {
+        items.forEach((x) => {
+          if (!x?.productId) return;
+          map.set(x.productId, (map.get(x.productId) || 0) + (x.quantity || 0));
+        });
+      } else if (imp.productId) {
+        map.set(imp.productId, imp.quantity || 0);
+      }
+      return map;
+    };
+    const oldQtyByProduct = qtyByProductOf(current);
+
+    const stockDelta = new Map<string, number>();
+    const allProductIds = new Set<string>([...oldQtyByProduct.keys(), ...newQtyByProduct.keys()]);
+    allProductIds.forEach((pid) => {
+      const d = (newQtyByProduct.get(pid) || 0) - (oldQtyByProduct.get(pid) || 0);
+      if (d !== 0) stockDelta.set(pid, d);
+    });
+
+    const newTotalCost = lineItems.reduce((s, l) => s + l.totalCost, 0);
+    const totalQty = lineItems.reduce((s, l) => s + l.quantity, 0);
+    const first = lineItems[0];
+    const now = new Date().toISOString();
+    const autoPayId = `PAY${importId.replace(/[^a-zA-Z0-9]/g, '').slice(-10)}`;
+
+    const allPayments = await MockBackend.getPayments();
+    const relatedPayments = allPayments.filter(
+      (p) => p.kind === 'payable' && p.importId === importId,
+    );
+    const existingAutoPay = relatedPayments.find((p) => p.id === autoPayId) || null;
+    const manualSum = relatedPayments
+      .filter((p) => p.id !== autoPayId)
+      .reduce((s, p) => s + (p.amount || 0), 0);
+
+    const autoPayAmount = paymentStatus === 'paid' ? Math.max(0, newTotalCost - manualSum) : 0;
+    const nextAutoPay: PaymentRecord | null =
+      autoPayAmount > 0
+        ? {
+            id: autoPayId,
+            kind: 'payable',
+            importId,
+            amount: autoPayAmount,
+            method: existingAutoPay?.method || 'cash',
+            createdAt: existingAutoPay?.createdAt || now,
+            supplierName: supplier,
+          }
+        : null;
+
+    const updatedRecord: ImportRecord = {
+      id: importId,
+      productId: first.productId,
+      sku: first.sku,
+      name: lineItems.length > 1 ? `${first.name} (+${lineItems.length - 1})` : first.name,
+      quantity: totalQty,
+      unitCost: first.unitCost,
+      totalCost: newTotalCost,
+      createdAt: createdAtISO,
+      supplierName: supplier,
+      paidAmount: paymentStatus === 'paid' ? newTotalCost : 0,
+      paymentStatus,
+      items: lineItems,
+    };
+    if (note) updatedRecord.note = note;
+    if (paymentStatus === 'paid') updatedRecord.lastPaidAt = existingAutoPay?.createdAt || now;
+
+    const readList = <T>(key: string): T[] => {
+      try {
+        const raw = localStorage.getItem(key);
+        const list = raw ? JSON.parse(raw) : [];
+        return Array.isArray(list) ? list : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const applyLocal = () => {
+      const importsLocal = readList<ImportRecord>(STORAGE_KEYS.IMPORTS);
+      localStorage.setItem(
+        STORAGE_KEYS.IMPORTS,
+        JSON.stringify(importsLocal.map((i) => (i.id === importId ? updatedRecord : i))),
+      );
+
+      const paymentsLocal = readList<PaymentRecord>(STORAGE_KEYS.PAYMENTS).filter(
+        (p) => p.id !== autoPayId,
+      );
+      if (nextAutoPay) paymentsLocal.unshift(nextAutoPay);
+      localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify(paymentsLocal));
+
+      if (stockDelta.size > 0) {
+        const productsLocal = readList<Product>(STORAGE_KEYS.PRODUCTS);
+        const nextProducts = productsLocal.map((p) => {
+          const d = stockDelta.get(p.id);
+          if (!d) return p;
+          return { ...p, stock: Math.max(0, (p.stock || 0) + d), importDate: now };
+        });
+        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
+      }
+    };
+
+    if (!MockBackend.isOnlineMode()) {
+      applyLocal();
+      return updatedRecord;
+    }
+
+    try {
+      const updates: Record<string, any> = {};
+      updates[`imports/${importId}`] = updatedRecord;
+      stockDelta.forEach((d, pid) => {
+        const product = products.find((p) => p.id === pid);
+        if (!product) return;
+        updates[`products/${pid}/stock`] = Math.max(0, (product.stock || 0) + d);
+        updates[`products/${pid}/importDate`] = now;
+      });
+      updates[`payments/${autoPayId}`] = nextAutoPay;
+      await withTimeout(update(ref(db), updates));
+      applyLocal();
+      return updatedRecord;
+    } catch (e) {
+      try {
+        applyLocal();
+        return updatedRecord;
+      } catch {
+        throw e;
+      }
+    }
   },
 
   deleteImport: async (importId: string) => {

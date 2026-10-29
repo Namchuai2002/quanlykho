@@ -99,6 +99,7 @@ export interface ImportRecord {
   paidAmount?: number;
   lastPaidAt?: string;
   paymentStatus?: ImportPaymentStatus;
+  note?: string;
   items?: ImportLineItem[];
 }
 
