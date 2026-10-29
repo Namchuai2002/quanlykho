@@ -114,6 +114,8 @@ export const Debts: React.FC = () => {
   const [payContext, setPayContext] = useState<{ kind: 'receivable' | 'payable'; orderId?: string; importId?: string; name: string; outstanding: number } | null>(null);
   const [payAmount, setPayAmount] = useState(0);
   const [payMethod, setPayMethod] = useState<PaymentRecord['method']>('cash');
+  const [payNote, setPayNote] = useState('');
+  const [payDate, setPayDate] = useState('');
   const [saving, setSaving] = useState(false);
   const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
   const [dateModalOpen, setDateModalOpen] = useState(false);
@@ -756,7 +758,33 @@ export const Debts: React.FC = () => {
     setPayContext({ kind: 'receivable', orderId, name: `${r.name} (${r.id})`, outstanding: r.outstanding });
     setPayAmount(r.outstanding);
     setPayMethod('cash');
+    setPayNote('');
+    setPayDate(toDateTimeLocal());
     setPayModalOpen(true);
+  };
+
+  // Mở giao diện thu tiền nhanh cho một khách hàng (tự chọn đơn còn nợ)
+  const collectForCustomer = (c: CustomerReceivable) => {
+    const pending = receivables.filter(
+      (r) => c.orderIds.includes(r.id) && r.outstanding > 0 && r.orderStatus === OrderStatus.COMPLETED,
+    );
+    if (pending.length === 0) {
+      showNotice('Khách hàng không có đơn nào cần thu tiền.');
+      return;
+    }
+    if (pending.length === 1) {
+      openReceivablePay(pending[0].id);
+      return;
+    }
+    // Nhiều đơn còn nợ → mở chi tiết khách ở tab Đơn hàng để chọn đơn cần thu
+    setSelectedCustomerKey(c.key);
+    setCustomerDetailTab('orders');
+    setCustOrderStatusFilter('all');
+    setCustTxnSearch('');
+    setCustDateFrom('');
+    setCustDateTo('');
+    setCustomerDetailOpen(true);
+    showNotice(`Khách có ${pending.length} đơn còn nợ — chọn đơn cần thu tiền.`);
   };
 
   const openPayablePay = (importId: string) => {
@@ -770,6 +798,8 @@ export const Debts: React.FC = () => {
     setPayContext({ kind: 'payable', importId, name: `${s.name}`, outstanding: s.outstanding });
     setPayAmount(s.outstanding);
     setPayMethod('bank');
+    setPayNote('');
+    setPayDate(toDateTimeLocal());
     setPayModalOpen(true);
   };
 
@@ -792,11 +822,13 @@ export const Debts: React.FC = () => {
 
     setSaving(true);
     try {
+      const note = payNote.trim() || undefined;
+      const paidAt = payDate ? new Date(payDate).toISOString() : undefined;
       if (payContext.kind === 'receivable' && payContext.orderId) {
-        await MockBackend.addOrderPayment(payContext.orderId, payAmount, payMethod);
+        await MockBackend.addOrderPayment(payContext.orderId, payAmount, payMethod, note, paidAt);
         showNotice(`Đã thu ${payAmount.toLocaleString()} ₫ từ đơn ${payContext.orderId}`);
       } else if (payContext.kind === 'payable' && payContext.importId) {
-        await MockBackend.addPayablePayment(payContext.importId, payAmount, payMethod);
+        await MockBackend.addPayablePayment(payContext.importId, payAmount, payMethod, note, paidAt);
         showNotice(`Đã thanh toán ${payAmount.toLocaleString()} ₫ cho NCC`);
       }
       setPayModalOpen(false);
@@ -1138,6 +1170,7 @@ export const Debts: React.FC = () => {
                       <th className="px-6 py-4 text-right">Còn nợ</th>
                       <th className="px-6 py-4">TT thanh toán</th>
                       <th className="px-6 py-4 text-right">Giao dịch gần nhất</th>
+                      <th className="px-6 py-4 text-right">Thao tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -1185,12 +1218,27 @@ export const Debts: React.FC = () => {
                           <td className="px-6 py-4 text-right text-xs text-gray-500">
                             {new Date(c.latestAt).toLocaleDateString('vi-VN')}
                           </td>
+                          <td className="px-6 py-4 text-right">
+                            {c.outstanding > 0 ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); collectForCustomer(c); }}
+                                title="Ghi nhận thu tiền cho khách này"
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-bold bg-indigo-600 text-white rounded-lg shadow-sm hover:bg-indigo-700 hover:shadow-md transition whitespace-nowrap"
+                              >
+                                <Wallet size={15}/> Thu tiền
+                              </button>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-xs font-bold text-green-700 bg-green-50 border border-green-200 px-3 py-1.5 rounded-lg whitespace-nowrap">
+                                <CheckCircle size={13}/> Đã đủ
+                              </span>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
                     {filteredCustomerReceivables.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="px-6 py-12 text-center text-gray-400">
+                        <td colSpan={8} className="px-6 py-12 text-center text-gray-400">
                           Không tìm thấy khách hàng phù hợp.
                         </td>
                       </tr>
@@ -1610,6 +1658,9 @@ export const Debts: React.FC = () => {
       >
         <form onSubmit={submitPayment} className="space-y-4">
           <div className="bg-indigo-50 border border-indigo-100 rounded p-3 text-sm">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-indigo-500">
+              {payContext?.kind === 'receivable' ? 'Khách hàng' : 'Nhà cung cấp'}
+            </p>
             <p className="font-semibold text-indigo-700">{payContext?.name || ''}</p>
             <p className="text-indigo-600">Còn nợ: {(payContext?.outstanding || 0).toLocaleString()} ₫</p>
           </div>
@@ -1637,6 +1688,25 @@ export const Debts: React.FC = () => {
                 <option value="other">Khác</option>
               </select>
             </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Ngày thu</label>
+            <input
+              type="datetime-local"
+              value={payDate}
+              onChange={(e) => setPayDate(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
+            <textarea
+              rows={2}
+              value={payNote}
+              onChange={(e) => setPayNote(e.target.value)}
+              placeholder="Ghi chú (không bắt buộc)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
           </div>
           <div className="flex justify-end gap-2">
             <button
@@ -2673,6 +2743,13 @@ export const Debts: React.FC = () => {
                         <p className="text-[10px] text-white/90 mt-0.5">
                           {selectedCustomer.outstanding > 0 ? 'Chưa thanh toán xong' : 'Không còn nợ ✓'}
                         </p>
+                        <button
+                          onClick={() => collectForCustomer(selectedCustomer)}
+                          disabled={selectedCustomer.outstanding <= 0}
+                          className="mt-3 w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-white text-indigo-700 rounded-lg text-sm font-black shadow hover:bg-indigo-50 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          <Wallet size={15}/> Thu tiền
+                        </button>
                       </div>
                     </div>
 

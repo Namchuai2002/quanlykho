@@ -721,9 +721,10 @@ export const MockBackend = {
     }
   },
   
-  addOrderPayment: async (orderId: string, amount: number, method: PaymentRecord['method'], note?: string): Promise<PaymentRecord> => {
+  addOrderPayment: async (orderId: string, amount: number, method: PaymentRecord['method'], note?: string, paidAt?: string): Promise<PaymentRecord> => {
     const id = `PAY${Date.now().toString().slice(-8)}`;
-    const now = new Date().toISOString();
+    const paidDate = paidAt ? new Date(paidAt) : new Date();
+    const now = Number.isNaN(paidDate.getTime()) ? new Date().toISOString() : paidDate.toISOString();
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new Error('Số tiền thu phải > 0');
     }
@@ -791,9 +792,10 @@ export const MockBackend = {
     }
   },
   
-  addPayablePayment: async (importId: string, amount: number, method: PaymentRecord['method'], note?: string): Promise<PaymentRecord> => {
+  addPayablePayment: async (importId: string, amount: number, method: PaymentRecord['method'], note?: string, paidAt?: string): Promise<PaymentRecord> => {
     const id = `PAY${Date.now().toString().slice(-8)}`;
-    const now = new Date().toISOString();
+    const paidDate = paidAt ? new Date(paidAt) : new Date();
+    const now = Number.isNaN(paidDate.getTime()) ? new Date().toISOString() : paidDate.toISOString();
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new Error('Số tiền thanh toán phải > 0');
     }
