@@ -64,6 +64,7 @@ export interface Customer {
   name: string;
   phone: string;
   address: string;
+  email?: string;
   createdAt: string;
   note?: string;
 }

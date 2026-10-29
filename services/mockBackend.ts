@@ -323,20 +323,99 @@ export const MockBackend = {
     return { valid: true, user: { username: session.username, name: session.name, role: session.role } };
   },
   
+  // Chuẩn hóa 1 bản ghi khách hàng (đảm bảo đủ trường, không làm mất dữ liệu gốc).
+  normalizeCustomer: (raw: any): Customer | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = String(raw.id ?? '').trim();
+    if (!id) return null;
+    return {
+      ...raw,
+      id,
+      name: String(raw.name ?? ''),
+      phone: String(raw.phone ?? ''),
+      address: String(raw.address ?? ''),
+      email: raw.email != null ? String(raw.email) : undefined,
+      createdAt: String(raw.createdAt ?? new Date().toISOString()),
+    } as Customer;
+  },
+
+  // Khử trùng theo id: cùng id nghĩa là CÙNG MỘT bản ghi bị lưu lặp.
+  // KHÔNG gộp các khách hàng khác nhau dù trùng tên (đó là người khác nhau).
+  dedupeCustomers: (list: any[]): Customer[] => {
+    const seenIds = new Set<string>();
+    const out: Customer[] = [];
+    for (const raw of Array.isArray(list) ? list : []) {
+      const c = MockBackend.normalizeCustomer(raw);
+      if (!c) continue;
+      if (seenIds.has(c.id)) continue;
+      seenIds.add(c.id);
+      out.push(c);
+    }
+    return out;
+  },
+
+  // Khóa định danh khách hàng dùng để phát hiện trùng: ưu tiên số điện thoại,
+  // nếu không có SĐT thì dùng tên đã chuẩn hóa.
+  customerIdentityKey: (c: { name?: string; phone?: string }): string => {
+    const phone = String(c.phone ?? '').replace(/[^0-9]/g, '');
+    if (phone) return `phone:${phone}`;
+    const name = String(c.name ?? '').trim().toLowerCase();
+    return name ? `name:${name}` : '';
+  },
+
   getCustomers: async () => {
+    let list: any[] = [];
     if (MockBackend.isOnlineMode()) {
       try {
-        return await readPath<any>('customers', 12000);
+        list = await readPath<any>('customers', 12000);
       } catch (e) {
-        return [];
+        list = [];
       }
     } else {
       const data = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
-      return data ? JSON.parse(data) : [];
+      list = data ? JSON.parse(data) : [];
     }
+    // Luôn khử trùng theo id để danh sách không hiển thị lặp cùng một khách hàng.
+    return MockBackend.dedupeCustomers(list);
   },
-  addCustomer: async (name: string, phone: string, address: string = '', note: string = '') => {
-    const newCust = { id: Date.now().toString(), name, phone, address, note, createdAt: new Date().toISOString() };
+  addCustomer: async (name: string, phone: string, address: string = '', note: string = '', email: string = '') => {
+    const trimmedName = (name || '').trim();
+    const trimmedPhone = (phone || '').trim();
+    const normPhone = trimmedPhone.replace(/[^0-9]/g, '');
+
+    const existing = await MockBackend.getCustomers();
+
+    // Chống trùng lặp: nếu đã tồn tại khách hàng cùng định danh (ưu tiên số điện thoại,
+    // fallback tên khi cả hai đều chưa có SĐT) → trả về bản ghi cũ, KHÔNG tạo thêm.
+    const duplicated = normPhone
+      ? existing.find((c) => String(c.phone || '').replace(/[^0-9]/g, '') === normPhone)
+      : existing.find(
+          (c) => !String(c.phone || '').trim() && String(c.name || '').trim().toLowerCase() === trimmedName.toLowerCase(),
+        );
+
+    if (duplicated) {
+      // Chỉ bổ sung thông tin còn thiếu, không ghi đè dữ liệu đã có.
+      const patch: Record<string, string> = {};
+      if (!duplicated.address && address) patch.address = address;
+      if (!duplicated.email && email) patch.email = email;
+      if (!duplicated.note && note) patch.note = note;
+      if (Object.keys(patch).length > 0) {
+        await MockBackend.updateCustomer(duplicated.id, patch);
+      }
+      return duplicated;
+    }
+
+    // Sinh id duy nhất: tránh trùng khi tạo liên tiếp trong cùng một mili-giây.
+    const baseId = Date.now();
+    const usedIds = new Set(existing.map((c) => c.id));
+    let id = baseId.toString();
+    let offset = 0;
+    while (usedIds.has(id)) {
+      offset += 1;
+      id = (baseId + offset).toString();
+    }
+
+    const newCust = { id, name: trimmedName, phone: trimmedPhone, address, note, email, createdAt: new Date().toISOString() };
     if (MockBackend.isOnlineMode()) {
       try {
         await withTimeout(set(ref(db, 'customers/' + newCust.id), newCust));
