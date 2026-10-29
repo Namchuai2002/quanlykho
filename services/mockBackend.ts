@@ -1,6 +1,6 @@
 import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ImportLineItem, ImportStockPayload, ImportPaymentStatus, ExportRecord, PaymentRecord, CartItem } from '../types';
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, get, set, child, update, push } from 'firebase/database';
+import { getDatabase, ref, get, set, child, update } from 'firebase/database';
 
 const sanitizeUrl = (url: string) => url.trim().replace(/[\)\s]+$/, '').replace(/\/+$/, '');
 
@@ -29,45 +29,10 @@ if (isOnline) {
         .catch(() => {});
     }
     db = getDatabase(app);
-    console.log("Kết nối Firebase thành công!");
   } catch (e) {
     console.error("Lỗi khởi tạo Firebase:", e);
   }
 }
-
-// --- INITIAL DATA (FALLBACK) ---
-const INITIAL_CATEGORIES: Category[] = [
-  { id: 'c1', name: 'Thời trang' },
-  { id: 'c2', name: 'Điện tử' },
-  { id: 'c3', name: 'Gia dụng' },
-  { id: 'c4', name: 'Mỹ phẩm' }
-];
-
-const INITIAL_PRODUCTS: Product[] = [
-  { 
-    id: '1', 
-    name: 'Áo Thun Basic', 
-    sku: 'AT001', 
-    price: 150000, 
-    stock: 50, 
-    category: 'Thời trang', 
-    importDate: '2023-10-01',
-    image: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=100&q=80'
-  },
-];
-
-const INITIAL_ORDERS: Order[] = [
-  { 
-    id: 'DH001', 
-    customerName: 'Khách Demo', 
-    customerPhone: '0901234567', 
-    address: '123 Đường Demo, Quận 1, TP.HCM',
-    totalAmount: 150000, 
-    status: OrderStatus.COMPLETED, 
-    createdAt: new Date().toISOString(), 
-    items: [{ productId: '1', quantity: 1, name: 'Áo Thun Basic', price: 150000 }]
-  },
-];
 
 const STORAGE_KEYS = {
   PRODUCTS: 'app_products',
@@ -893,7 +858,7 @@ export const MockBackend = {
     importId: string,
     patch: Partial<Pick<ImportRecord, 'createdAt' | 'supplierName'>>,
   ) => {
-    const buildSafePatch = (current: ImportRecord) => {
+    const buildSafePatch = () => {
       const safePatch: any = {};
       if (typeof patch.supplierName === 'string') safePatch.supplierName = patch.supplierName;
       if (typeof patch.createdAt === 'string' && patch.createdAt.trim()) {
@@ -919,7 +884,7 @@ export const MockBackend = {
       const idx = importsLocal.findIndex((i) => i.id === importId);
       if (idx === -1) throw new Error('Phiếu nhập không tồn tại');
       const current = importsLocal[idx];
-      const merged = { ...current, ...buildSafePatch(current) };
+      const merged = { ...current, ...buildSafePatch() };
       importsLocal[idx] = merged;
       localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(importsLocal));
       return merged;
@@ -930,7 +895,7 @@ export const MockBackend = {
       throw new Error('Phiếu nhập không tồn tại');
     }
     const current = (snap as any).val() as ImportRecord;
-    const merged = { ...current, ...buildSafePatch(current) } as ImportRecord;
+    const merged = { ...current, ...buildSafePatch() } as ImportRecord;
     const updates: any = {};
     updates[`imports/${importId}`] = merged;
     await withTimeout(update(ref(db), updates));
@@ -1369,7 +1334,6 @@ export const MockBackend = {
         results.imports = Object.keys(importUpdates).length;
       }
       
-      console.log("Đồng bộ dữ liệu thành công:", results);
       return results;
     } catch (e) {
       console.error("Lỗi đồng bộ dữ liệu:", e);

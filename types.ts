@@ -53,12 +53,6 @@ export interface User {
   role: 'admin';
 }
 
-export interface DashboardStats {
-  totalRevenue: number;
-  totalOrders: number;
-  lowStockCount: number;
-}
-
 export interface Customer {
   id: string;
   name: string;

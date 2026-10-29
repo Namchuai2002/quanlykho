@@ -18,7 +18,6 @@ const App: React.FC = () => {
     return localStorage.getItem('current_page') || 'dashboard';
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [bootReady, setBootReady] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('current_page', currentPage);
@@ -57,8 +56,6 @@ const App: React.FC = () => {
           // Check lỗi mạng → giữ phiên local (tốt nhất có thể)
         }
       }
-
-      if (!cancelled) setBootReady(true);
     };
 
     bootAuth();

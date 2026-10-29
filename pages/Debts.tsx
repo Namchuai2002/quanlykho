@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { MockBackend } from '../services/mockBackend';
-import { DebtService, Receivable, Payable, HistoryGroup, HistoryItem } from '../services/debtService';
+import { DebtService, Receivable, Payable, HistoryGroup } from '../services/debtService';
 import { Order, ImportRecord, PaymentRecord, OrderStatus, Customer } from '../types';
 import {
   Banknote,
@@ -8,9 +8,6 @@ import {
   CreditCard,
   Loader2,
   Search,
-  Eye,
-  Edit2,
-  Printer,
   User,
   Phone,
   MapPin,
@@ -1850,7 +1847,7 @@ export const Debts: React.FC = () => {
                         </button>
                       </div>
                       <div className="border border-gray-200 rounded-xl overflow-hidden">
-                        {selectedImportWithPay.slice(0, 3).map(({ imp, goodsTotal, total, paid, outstanding, status }) => (
+                        {selectedImportWithPay.slice(0, 3).map(({ imp, total, paid, outstanding, status }) => (
                           <div key={imp.id} className="px-4 py-3 border-b border-gray-100 last:border-b-0 hover:bg-emerald-50/30">
                             <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4 justify-between">
                               <div className="min-w-0 flex-1">
@@ -2688,7 +2685,7 @@ export const Debts: React.FC = () => {
                         </button>
                       </div>
                       <div className="border border-gray-200 rounded-xl overflow-hidden">
-                        {selectedOrderWithPay.slice(0, 3).map(({ order, goodsTotal, discPct, afterDisc, paid, outstanding, status }) => (
+                        {selectedOrderWithPay.slice(0, 3).map(({ order, afterDisc, paid, outstanding, status }) => (
                           <div key={order.id} className="px-4 py-3 border-b border-gray-100 last:border-b-0 hover:bg-indigo-50/30">
                             <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4 justify-between">
                               <div className="min-w-0 flex-1">
@@ -2865,7 +2862,7 @@ export const Debts: React.FC = () => {
                           <p className="text-xs mt-1">Thử đặt lại bộ lọc hoặc tìm kiếm khác</p>
                         </div>
                       )}
-                      {filteredCustomerOrders.map((entry, entryIdx) => {
+                      {filteredCustomerOrders.map((entry) => {
                         const { order, beforeLineDisc, lineDiscTotal, afterLineDisc, goodsTotal, discPct, discAmount, afterDisc, paid, outstanding, status } = entry;
                         const isExpanded = expandedOrderIds.has(order.id);
                         // Lấy lịch sử thanh toán của riêng đơn này
