@@ -810,6 +810,151 @@ export const MockBackend = {
     return payment;
   },
 
+  updateImport: async (
+    importId: string,
+    patch: Partial<Pick<ImportRecord, 'createdAt' | 'supplierName'>>,
+  ) => {
+    const buildSafePatch = (current: ImportRecord) => {
+      const safePatch: any = {};
+      if (typeof patch.supplierName === 'string') safePatch.supplierName = patch.supplierName;
+      if (typeof patch.createdAt === 'string' && patch.createdAt.trim()) {
+        const d = new Date(patch.createdAt);
+        if (!Number.isNaN(d.getTime())) safePatch.createdAt = d.toISOString();
+      }
+      return safePatch;
+    };
+
+    const patchLocal = (merged: ImportRecord) => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.IMPORTS);
+        const list: ImportRecord[] = raw ? JSON.parse(raw) : [];
+        const next = Array.isArray(list) ? list.slice() : [];
+        const idx = next.findIndex((i) => i.id === importId);
+        if (idx >= 0) next[idx] = merged;
+        localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(next));
+      } catch {}
+    };
+
+    if (!MockBackend.isOnlineMode()) {
+      const importsLocal = await MockBackend.getImports();
+      const idx = importsLocal.findIndex((i) => i.id === importId);
+      if (idx === -1) throw new Error('Phiếu nhập không tồn tại');
+      const current = importsLocal[idx];
+      const merged = { ...current, ...buildSafePatch(current) };
+      importsLocal[idx] = merged;
+      localStorage.setItem(STORAGE_KEYS.IMPORTS, JSON.stringify(importsLocal));
+      return merged;
+    }
+
+    const snap = await withTimeout(get(ref(db, `imports/${importId}`)));
+    if (!snap || !(snap as any).exists || !(snap as any).exists()) {
+      throw new Error('Phiếu nhập không tồn tại');
+    }
+    const current = (snap as any).val() as ImportRecord;
+    const merged = { ...current, ...buildSafePatch(current) } as ImportRecord;
+    const updates: any = {};
+    updates[`imports/${importId}`] = merged;
+    await withTimeout(update(ref(db), updates));
+    patchLocal(merged);
+    return merged;
+  },
+
+  deleteImport: async (importId: string) => {
+    const qtyByProductOf = (imp: ImportRecord | null): Map<string, number> => {
+      const map = new Map<string, number>();
+      if (!imp) return map;
+      const items = Array.isArray(imp.items) && imp.items.length > 0 ? imp.items : null;
+      if (items) {
+        items.forEach((it) => {
+          if (!it?.productId) return;
+          map.set(it.productId, (map.get(it.productId) || 0) + (it.quantity || 0));
+        });
+      } else if (imp.productId) {
+        map.set(imp.productId, imp.quantity || 0);
+      }
+      return map;
+    };
+
+    const applyLocalDelete = (imp: ImportRecord | null) => {
+      const readList = <T>(key: string): T[] => {
+        try {
+          const raw = localStorage.getItem(key);
+          const list = raw ? JSON.parse(raw) : [];
+          return Array.isArray(list) ? list : [];
+        } catch {
+          return [];
+        }
+      };
+
+      const importsLocal = readList<ImportRecord>(STORAGE_KEYS.IMPORTS);
+      localStorage.setItem(
+        STORAGE_KEYS.IMPORTS,
+        JSON.stringify(importsLocal.filter((i) => i.id !== importId)),
+      );
+
+      const paymentsLocal = readList<PaymentRecord>(STORAGE_KEYS.PAYMENTS);
+      localStorage.setItem(
+        STORAGE_KEYS.PAYMENTS,
+        JSON.stringify(paymentsLocal.filter((p) => p.importId !== importId)),
+      );
+
+      // Đảo ngược tồn kho đã cộng khi nhập
+      const qtyByProduct = qtyByProductOf(imp);
+      if (qtyByProduct.size > 0) {
+        const productsLocal = readList<Product>(STORAGE_KEYS.PRODUCTS);
+        const nextProducts = productsLocal.map((p) => {
+          const qty = qtyByProduct.get(p.id);
+          return qty ? { ...p, stock: Math.max(0, (p.stock || 0) - qty) } : p;
+        });
+        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
+      }
+    };
+
+    const [payments, products] = await Promise.all([
+      MockBackend.getPayments(),
+      MockBackend.getProducts(),
+    ]);
+    const relatedPayments = payments.filter((p) => p.kind === 'payable' && p.importId === importId);
+
+    if (!MockBackend.isOnlineMode()) {
+      const importsLocal = await MockBackend.getImports();
+      const imp = importsLocal.find((i) => i.id === importId) || null;
+      applyLocalDelete(imp);
+      return;
+    }
+
+    try {
+      const snap = await withTimeout(get(ref(db, `imports/${importId}`)));
+      const firebaseImp =
+        snap && (snap as any).exists && (snap as any).exists()
+          ? ((snap as any).val() as ImportRecord)
+          : null;
+      const localImports = await MockBackend.getImports();
+      const imp = firebaseImp || localImports.find((i) => i.id === importId) || null;
+
+      const updates: Record<string, any> = {};
+      updates[`imports/${importId}`] = null;
+      relatedPayments.forEach((p) => {
+        updates[`payments/${p.id}`] = null;
+      });
+      qtyByProductOf(imp).forEach((qty, productId) => {
+        const product = products.find((p) => p.id === productId);
+        if (product) updates[`products/${product.id}/stock`] = Math.max(0, (product.stock || 0) - qty);
+      });
+
+      await withTimeout(update(ref(db), updates));
+      applyLocalDelete(imp);
+    } catch (e) {
+      try {
+        const importsLocal = await MockBackend.getImports();
+        const imp = importsLocal.find((i) => i.id === importId) || null;
+        applyLocalDelete(imp);
+        return;
+      } catch {}
+      throw e;
+    }
+  },
+
   getDebtBundle: async () => {
     const [orders, imports, payments] = await Promise.all([
       MockBackend.getOrders(),
