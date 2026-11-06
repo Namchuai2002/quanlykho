@@ -1,4 +1,4 @@
-import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ImportLineItem, ImportStockPayload, ImportPaymentStatus, ExportRecord, PaymentRecord, CartItem } from '../types';
+import { Product, Order, OrderStatus, User, Category, Customer, ImportRecord, ImportLineItem, ImportStockPayload, ImportPaymentStatus, ExportRecord, PaymentRecord, CartItem, ReturnRecord, ReturnLineItem, ReturnStatus, CreateReturnPayload, UpdateReturnPayload } from '../types';
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, get, set, child, update } from 'firebase/database';
 
@@ -43,6 +43,7 @@ const STORAGE_KEYS = {
   IMPORTS: 'app_imports',
   EXPORTS: 'app_exports',
   PAYMENTS: 'app_payments',
+  RETURNS: 'app_returns',
   AUTH: 'app_auth',
 };
 
@@ -172,6 +173,110 @@ const readPath = async <T>(path: string, ms: number): Promise<T[]> => {
       return [];
     }
   }
+};
+
+// --- HÀNG TRẢ LẠI (RETURN HELPERS) ---
+// Mỗi phiếu trả sinh 1 bút toán công nợ có ID xác định để tránh ghi trùng khi sửa/xóa.
+const returnPaymentId = (returnId: string) => `RETPAY_${returnId}`;
+
+const buildReturnPayment = (record: ReturnRecord): PaymentRecord => ({
+  id: returnPaymentId(record.id),
+  kind: 'receivable',
+  orderId: record.orderId,
+  amount: record.totalAmount,
+  method: 'other',
+  createdAt: record.createdAt,
+  note: `Giảm trừ công nợ do trả hàng ${record.id}`,
+  customerName: record.customerName,
+  returnId: record.id,
+});
+
+const buildReturnLineItems = (
+  rawItems: { productId: string; quantity: number; unitPrice: number }[],
+  products: Product[],
+): ReturnLineItem[] => {
+  const merged = new Map<string, ReturnLineItem>();
+  for (const it of rawItems) {
+    const product = products.find((p) => p.id === it?.productId);
+    if (!product) throw new Error('Sản phẩm không tồn tại');
+    const qty = Math.floor(Number(it.quantity) || 0);
+    if (qty <= 0) throw new Error(`Số lượng trả của "${product.name}" phải lớn hơn 0`);
+    const unitPrice = Math.max(0, Math.round(Number(it.unitPrice) || 0));
+    const cur = merged.get(product.id);
+    if (cur) {
+      cur.quantity += qty;
+      cur.totalPrice = cur.quantity * cur.unitPrice;
+    } else {
+      merged.set(product.id, {
+        productId: product.id,
+        sku: product.sku,
+        name: product.name,
+        quantity: qty,
+        unitPrice,
+        totalPrice: qty * unitPrice,
+      });
+    }
+  }
+  return Array.from(merged.values());
+};
+
+// Kiểm tra trả một phần / trả nhiều lần: tổng SL trả của mỗi SP không vượt quá SL đã mua,
+// và tổng giá trị trả không vượt quá giá trị đơn hàng.
+const validateReturnAgainstOrder = (
+  order: Order,
+  lineItems: ReturnLineItem[],
+  existingReturns: ReturnRecord[],
+  excludeReturnId?: string,
+) => {
+  const orderedQty = new Map<string, number>();
+  for (const it of order.items || []) {
+    orderedQty.set(it.productId, (orderedQty.get(it.productId) || 0) + it.quantity);
+  }
+  const alreadyQty = new Map<string, number>();
+  let alreadyValue = 0;
+  for (const r of existingReturns) {
+    if (r.orderId !== order.id || r.status === 'cancelled') continue;
+    if (excludeReturnId && r.id === excludeReturnId) continue;
+    alreadyValue += r.totalAmount;
+    for (const it of r.items) {
+      alreadyQty.set(it.productId, (alreadyQty.get(it.productId) || 0) + it.quantity);
+    }
+  }
+  for (const it of lineItems) {
+    const max = orderedQty.get(it.productId) || 0;
+    const used = alreadyQty.get(it.productId) || 0;
+    const remain = Math.max(0, max - used);
+    if (it.quantity > remain) {
+      throw new Error(`Số lượng trả của "${it.name}" vượt quá số lượng còn có thể trả (${remain})`);
+    }
+  }
+  const newValue = lineItems.reduce((s, l) => s + l.totalPrice, 0);
+  if (alreadyValue + newValue > order.totalAmount) {
+    throw new Error('Tổng giá trị hàng trả vượt quá giá trị đơn hàng');
+  }
+};
+
+const mirrorReturnLocal = (record: ReturnRecord) => {
+  try {
+    const local = localStorage.getItem(STORAGE_KEYS.RETURNS);
+    const list: ReturnRecord[] = local ? JSON.parse(local) : [];
+    const exists = list.some((r) => r.id === record.id);
+    const next = exists ? list.map((r) => (r.id === record.id ? record : r)) : [record, ...list];
+    localStorage.setItem(STORAGE_KEYS.RETURNS, JSON.stringify(next));
+  } catch {}
+};
+
+const mirrorPaymentLocal = (payment: PaymentRecord | null, removeId?: string) => {
+  try {
+    const local = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
+    const list: PaymentRecord[] = local ? JSON.parse(local) : [];
+    let next = removeId ? list.filter((p) => p.id !== removeId) : list;
+    if (payment) {
+      const exists = next.some((p) => p.id === payment.id);
+      next = exists ? next.map((p) => (p.id === payment.id ? payment : p)) : [payment, ...next];
+    }
+    localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify(next));
+  } catch {}
 };
 
 // --- DATA SERVICE ---
@@ -1204,6 +1309,201 @@ export const MockBackend = {
       MockBackend.getPayments(),
     ]);
     return { orders, imports, payments };
+  },
+
+  // --- RETURNS (HÀNG TRẢ LẠI) ---
+  getReturns: async (): Promise<ReturnRecord[]> => {
+    let firebaseList: ReturnRecord[] = [];
+    if (MockBackend.isOnlineMode()) {
+      try {
+        firebaseList = (await readPath<ReturnRecord>('returns', 12000)) as any[];
+      } catch (e) {
+        console.error('Firebase getReturns failed, using local fallback', e);
+      }
+    }
+
+    let localList: ReturnRecord[] = [];
+    try {
+      const local = localStorage.getItem(STORAGE_KEYS.RETURNS);
+      localList = local ? JSON.parse(local) : [];
+    } catch {
+      localList = [];
+    }
+
+    // Merge: ưu tiên Firebase, thêm local nếu ID chưa có. Bỏ bản ghi cũ/không hợp lệ.
+    const map = new Map<string, ReturnRecord>();
+    [...localList, ...firebaseList].forEach((r) => {
+      if (r && r.id && r.orderId && Array.isArray(r.items)) map.set(r.id, r);
+    });
+
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+  },
+
+  createReturn: async (payload: CreateReturnPayload): Promise<ReturnRecord> => {
+    const orderId = (payload?.orderId || '').trim();
+    const reason = (payload?.reason || '').trim();
+    const status: ReturnStatus = payload?.status || 'completed';
+    const rawItems = Array.isArray(payload?.items) ? payload.items : [];
+
+    if (!orderId) throw new Error('Vui lòng chọn đơn hàng cần trả');
+    if (rawItems.length === 0) throw new Error('Vui lòng chọn hàng hóa trả lại');
+    if (!reason) throw new Error('Vui lòng nhập lý do trả hàng');
+
+    const [orders, products, existingReturns] = await Promise.all([
+      MockBackend.getOrders(),
+      MockBackend.getProducts(),
+      MockBackend.getReturns(),
+    ]);
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) throw new Error('Đơn hàng không tồn tại');
+    if (order.status === OrderStatus.CANCELLED) throw new Error('Đơn hàng đã hủy, không thể tạo phiếu trả');
+
+    const lineItems = buildReturnLineItems(rawItems, products);
+    const totalAmount = lineItems.reduce((s, l) => s + l.totalPrice, 0);
+    if (totalAmount <= 0) throw new Error('Giá trị hàng trả phải lớn hơn 0');
+    validateReturnAgainstOrder(order, lineItems, existingReturns);
+
+    const now = new Date().toISOString();
+    const createdAt = payload.createdAt && !Number.isNaN(new Date(payload.createdAt).getTime())
+      ? new Date(payload.createdAt).toISOString()
+      : now;
+    const id = `TL${Date.now().toString().slice(-8)}`;
+
+    const record: ReturnRecord = {
+      id,
+      orderId: order.id,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      items: lineItems,
+      totalAmount,
+      reason,
+      status,
+      refundMethod: payload.refundMethod,
+      refunded: !!payload.refunded,
+      note: payload.note,
+      createdAt,
+      processedAt: status === 'completed' ? now : undefined,
+    };
+
+    // Chỉ ghi bút toán công nợ khi phiếu ở trạng thái Hoàn thành.
+    // KHÔNG thay đổi tồn kho khi trả hàng.
+    const payment = status === 'completed' ? buildReturnPayment(record) : null;
+
+    if (MockBackend.isOnlineMode()) {
+      try {
+        const updates: any = { ['returns/' + id]: record };
+        updates['payments/' + returnPaymentId(id)] = payment;
+        await withTimeout(update(ref(db), updates));
+      } catch (e) {
+        console.error('Firebase createReturn failed, saving locally', e);
+      }
+    }
+
+    mirrorReturnLocal(record);
+    if (payment) mirrorPaymentLocal(payment);
+    return record;
+  },
+
+  updateReturn: async (id: string, patch: UpdateReturnPayload): Promise<ReturnRecord> => {
+    const returns = await MockBackend.getReturns();
+    const current = returns.find((r) => r.id === id);
+    if (!current) throw new Error('Phiếu trả không tồn tại');
+
+    const [orders, products] = await Promise.all([
+      MockBackend.getOrders(),
+      MockBackend.getProducts(),
+    ]);
+    const orderId = (patch.orderId ?? current.orderId).trim();
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) throw new Error('Đơn hàng không tồn tại');
+    if (order.status === OrderStatus.CANCELLED) throw new Error('Đơn hàng đã hủy, không thể lưu phiếu trả');
+
+    const reason = (patch.reason ?? current.reason).trim();
+    if (!reason) throw new Error('Vui lòng nhập lý do trả hàng');
+
+    const rawItems =
+      patch.items ??
+      current.items.map((i) => ({ productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice }));
+    const lineItems = buildReturnLineItems(rawItems, products);
+    const totalAmount = lineItems.reduce((s, l) => s + l.totalPrice, 0);
+    if (totalAmount <= 0) throw new Error('Giá trị hàng trả phải lớn hơn 0');
+    validateReturnAgainstOrder(order, lineItems, returns, id);
+
+    const status: ReturnStatus = patch.status ?? current.status;
+    const now = new Date().toISOString();
+    const createdAt = patch.createdAt && !Number.isNaN(new Date(patch.createdAt).getTime())
+      ? new Date(patch.createdAt).toISOString()
+      : current.createdAt;
+
+    const nextRecord: ReturnRecord = {
+      ...current,
+      orderId: order.id,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      items: lineItems,
+      totalAmount,
+      reason,
+      status,
+      refundMethod: patch.refundMethod ?? current.refundMethod,
+      refunded: patch.refunded ?? current.refunded,
+      note: patch.note ?? current.note,
+      createdAt,
+      processedAt: status === 'completed' ? current.processedAt || now : undefined,
+      cancelReason: status === 'cancelled' ? patch.cancelReason ?? current.cancelReason : undefined,
+    };
+
+    // Upsert / gỡ bút toán công nợ tương ứng (ID xác định nên không phát sinh trùng lặp).
+    const payment = status === 'completed' ? buildReturnPayment(nextRecord) : null;
+
+    let onlineError: any = null;
+    if (MockBackend.isOnlineMode()) {
+      try {
+        const updates: any = { ['returns/' + id]: nextRecord };
+        updates['payments/' + returnPaymentId(id)] = payment;
+        await withTimeout(update(ref(db), updates));
+      } catch (e) {
+        onlineError = e;
+      }
+    }
+
+    mirrorReturnLocal(nextRecord);
+    if (payment) mirrorPaymentLocal(payment);
+    else mirrorPaymentLocal(null, returnPaymentId(id));
+
+    if (onlineError) throw onlineError;
+    return nextRecord;
+  },
+
+  updateReturnStatus: async (id: string, status: ReturnStatus, cancelReason?: string): Promise<ReturnRecord> => {
+    return MockBackend.updateReturn(id, { status, cancelReason });
+  },
+
+  deleteReturn: async (id: string) => {
+    const returns = await MockBackend.getReturns();
+    if (!returns.some((r) => r.id === id)) return;
+
+    let onlineError: any = null;
+    if (MockBackend.isOnlineMode()) {
+      try {
+        const updates: any = { ['returns/' + id]: null };
+        updates['payments/' + returnPaymentId(id)] = null;
+        await withTimeout(update(ref(db), updates));
+      } catch (e) {
+        onlineError = e;
+      }
+    }
+
+    // Xóa khỏi cache local (cả phiếu trả lẫn bút toán công nợ liên quan)
+    try {
+      const local = localStorage.getItem(STORAGE_KEYS.RETURNS);
+      const list: ReturnRecord[] = local ? JSON.parse(local) : [];
+      localStorage.setItem(STORAGE_KEYS.RETURNS, JSON.stringify(list.filter((r) => r.id !== id)));
+    } catch {}
+    mirrorPaymentLocal(null, returnPaymentId(id));
+
+    if (onlineError) throw onlineError;
   },
 
   addProduct: async (product: Omit<Product, 'id' | 'importDate'>) => {

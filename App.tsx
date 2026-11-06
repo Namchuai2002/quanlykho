@@ -11,6 +11,7 @@ import { User } from './types';
 import { MockBackend } from './services/mockBackend';
 import { ChatWidget } from './components/ChatWidget';
 import { Debts } from './pages/Debts';
+import { Returns } from './pages/Returns';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -126,6 +127,8 @@ const App: React.FC = () => {
         return <Settings user={user} onUserUpdated={handleUserUpdated} />;
       case 'debts':
         return <Debts />;
+      case 'returns':
+        return <Returns />;
       default:
         return <Dashboard />;
     }
@@ -160,6 +163,8 @@ const App: React.FC = () => {
                 <button onClick={() => { setCurrentPage('inventory'); setSidebarOpen(false); }} className="block w-full text-left text-gray-300 p-3 hover:bg-gray-800 rounded">Kho Hàng</button>
                 <button onClick={() => { setCurrentPage('orders'); setSidebarOpen(false); }} className="block w-full text-left text-gray-300 p-3 hover:bg-gray-800 rounded">Đơn Hàng</button>
                 <button onClick={() => { setCurrentPage('customers'); setSidebarOpen(false); }} className="block w-full text-left text-gray-300 p-3 hover:bg-gray-800 rounded">Khách Hàng</button>
+                <button onClick={() => { setCurrentPage('debts'); setSidebarOpen(false); }} className="block w-full text-left text-gray-300 p-3 hover:bg-gray-800 rounded">Công Nợ</button>
+                <button onClick={() => { setCurrentPage('returns'); setSidebarOpen(false); }} className="block w-full text-left text-gray-300 p-3 hover:bg-gray-800 rounded">Hàng Trả Lại</button>
                 <button onClick={() => { setCurrentPage('settings'); setSidebarOpen(false); }} className="block w-full text-left text-gray-300 p-3 hover:bg-gray-800 rounded">Cài Đặt</button>
                 <button onClick={handleLogout} className="block w-full text-left text-red-400 p-3 hover:bg-gray-800 rounded mt-10">Đăng Xuất</button>
              </nav>

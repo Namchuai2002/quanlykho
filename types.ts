@@ -121,4 +121,58 @@ export interface PaymentRecord {
   note?: string;
   customerName?: string;
   supplierName?: string;
+  returnId?: string;
+}
+
+// --- HÀNG TRẢ LẠI ---
+export type ReturnStatus = 'pending' | 'completed' | 'cancelled';
+export type RefundMethod = 'cash' | 'bank' | 'wallet' | 'credit' | 'other';
+
+export interface ReturnLineItem {
+  productId: string;
+  sku: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+}
+
+export interface ReturnRecord {
+  id: string;
+  orderId: string;
+  customerName: string;
+  customerPhone?: string;
+  items: ReturnLineItem[];
+  totalAmount: number;
+  reason: string;
+  status: ReturnStatus;
+  refundMethod?: RefundMethod;
+  refunded: boolean;
+  note?: string;
+  createdAt: string;
+  processedAt?: string;
+  cancelReason?: string;
+}
+
+export interface CreateReturnPayload {
+  orderId: string;
+  items: { productId: string; quantity: number; unitPrice: number }[];
+  reason: string;
+  status?: ReturnStatus;
+  refundMethod?: RefundMethod;
+  refunded?: boolean;
+  note?: string;
+  createdAt?: string;
+}
+
+export interface UpdateReturnPayload {
+  orderId?: string;
+  items?: { productId: string; quantity: number; unitPrice: number }[];
+  reason?: string;
+  status?: ReturnStatus;
+  refundMethod?: RefundMethod;
+  refunded?: boolean;
+  note?: string;
+  createdAt?: string;
+  cancelReason?: string;
 }
