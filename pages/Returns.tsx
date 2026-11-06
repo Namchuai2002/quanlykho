@@ -28,6 +28,7 @@ import {
   PlayCircle,
   Pencil,
   History,
+  Printer,
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { NumberInput } from '../components/NumberInput';
@@ -47,6 +48,13 @@ const REFUND_METHOD_LABEL: Record<RefundMethod, string> = {
 };
 
 const formatMoney = (n: number) => Math.round(n || 0).toLocaleString('vi-VN');
+
+const escapeHtml = (s: unknown) =>
+  String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 
 const formatDate = (iso?: string) => {
   if (!iso) return '—';
@@ -453,6 +461,189 @@ export const Returns: React.FC = () => {
     setDetailOpen(true);
   };
 
+  // In Phiếu trả hàng — tái sử dụng thông tin công ty, CSS và cơ chế in của Phiếu xuất kho.
+  const printReturn = (record: ReturnRecord) => {
+    const created = new Date(record.createdAt);
+    const day = String(created.getDate()).padStart(2, '0');
+    const month = String(created.getMonth() + 1).padStart(2, '0');
+    const year = String(created.getFullYear());
+
+    const order = orderById.get(record.orderId);
+
+    const itemRows = record.items
+      .map((it, idx) => {
+        const unit = order?.items.find((oi) => oi.productId === it.productId)?.unit || 'Gói';
+        return `
+          <tr>
+            <td class="c">${idx + 1}</td>
+            <td>${escapeHtml(it.sku || '')}</td>
+            <td></td>
+            <td>${escapeHtml(it.name)}</td>
+            <td class="c">${escapeHtml(unit)}</td>
+            <td class="c">${it.quantity}</td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    const totalQty = record.items.reduce((s, it) => s + (it.quantity || 0), 0);
+
+    const html = `<!DOCTYPE html>
+      <html lang="vi">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Phiếu trả hàng ${escapeHtml(record.id)}</title>
+        <style>
+          @page { size: A4 portrait; margin: 7mm 8mm; }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            color: #111;
+            font-family: "Times New Roman", Times, serif;
+            background: #fff;
+          }
+          .sheet { padding: 4px 4px 8px; min-height: 0; width: 100%; }
+          .company { text-align: center; line-height: 1.35; }
+          .company .name { font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2px; }
+          .company .tag { font-size: 12px; font-weight: 700; text-transform: uppercase; margin-top: 1px; }
+          .company .addr { font-size: 11.5px; margin-top: 2px; }
+          hr.line { border: 0; border-top: 1.5px solid #111; margin: 8px 0 10px; }
+          .doc-title { text-align: center; font-size: 21px; font-weight: 700; letter-spacing: 0.6px; margin: 0; }
+          .doc-date { text-align: center; font-size: 12.5px; margin: 3px 0 4px; }
+          .meta-id { text-align: center; font-size: 11.5px; color: #444; margin-bottom: 8px; }
+          .info { font-size: 13px; line-height: 1.75; margin-bottom: 8px; }
+          table.grid {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            page-break-inside: auto;
+          }
+          table.grid th, table.grid td {
+            border: 1px solid #111;
+            padding: 3px 3px;
+            font-size: 11px;
+            vertical-align: middle;
+          }
+          table.grid thead { display: table-header-group; }
+          table.grid tr { page-break-inside: avoid; page-break-after: auto; }
+          table.grid th { font-weight: 700; text-align: center; background: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .c { text-align: center; }
+          .sum-row td { background: #f5f5f5; -webkit-print-color-adjust: exact; print-color-adjust: exact; border-top: 1px solid #111; font-weight: 700; }
+          .sum-label { text-align: right; font-weight: 700; padding-right: 8px; }
+          .signs { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr; margin-top: 16px; text-align: center; gap: 4px; }
+          .signs .role { font-size: 12.5px; font-weight: 700; }
+          .signs .hint { font-size: 11px; font-style: italic; margin-top: 2px; }
+          @media print {
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .sheet { min-height: auto; padding: 0; }
+            @page { size: A4 portrait; margin: 7mm 8mm; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="sheet">
+          <div class="company">
+            <div class="name">CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ XỔ VIỆT</div>
+            <div class="tag">CHUYÊN BÁN BUÔN - BÁN LẺ HÀNG THỰC PHẨM - MỸ PHẨM NGA - RUS</div>
+            <div class="addr">Số 11, ngách 15, ngõ 158 Nguyễn Sơn, P. Bồ Đề, Q. Long Biên, Hà Nội - ĐT: 0981795469-0983272285</div>
+          </div>
+          <hr class="line" />
+          <h1 class="doc-title">PHIẾU TRẢ HÀNG</h1>
+          <div class="doc-date">Ngày ${day} tháng ${month} năm ${year}</div>
+          <div class="meta-id">Số phiếu: <strong>${escapeHtml(record.id)}</strong></div>
+          <div class="info">
+            <div>Đối tượng nhận hàng: <strong>${escapeHtml(record.customerName || 'Khách lẻ')}</strong></div>
+            <div>Điện thoại: ${escapeHtml(record.customerPhone || '')}</div>
+            <div>Người giao hàng: ......................................................</div>
+            <div>Nội dung diễn giải: ${escapeHtml(record.reason || '')}</div>
+          </div>
+          <table class="grid">
+            <colgroup>
+              <col style="width:6%" />
+              <col style="width:14%" />
+              <col style="width:16%" />
+              <col style="width:40%" />
+              <col style="width:12%" />
+              <col style="width:12%" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>STT</th>
+                <th>Mã SKU</th>
+                <th>Mã vạch</th>
+                <th>Tên hàng hóa</th>
+                <th>ĐVT</th>
+                <th>Số lượng</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemRows}
+              <tr class="sum-row">
+                <td colspan="5" class="sum-label">Tổng số lượng hàng trả:</td>
+                <td class="c" style="font-size:12px;">${totalQty}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="signs">
+            <div>
+              <div class="role">Người lập phiếu</div>
+              <div class="hint">(Ký, họ tên)</div>
+            </div>
+            <div>
+              <div class="role">Người giao hàng</div>
+              <div class="hint">(Ký, họ tên)</div>
+            </div>
+            <div>
+              <div class="role">Thủ kho</div>
+              <div class="hint">(Ký, họ tên)</div>
+            </div>
+            <div>
+              <div class="role">Kế toán trưởng</div>
+              <div class="hint">(Ký, họ tên)</div>
+            </div>
+            <div>
+              <div class="role">Giám đốc</div>
+              <div class="hint">(Ký, họ tên)</div>
+            </div>
+          </div>
+        </div>
+      </body>
+      </html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document;
+    if (!doc) {
+      document.body.removeChild(iframe);
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    let printed = false;
+    const triggerPrint = () => {
+      if (printed) return;
+      printed = true;
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(() => {
+        if (iframe.parentNode) document.body.removeChild(iframe);
+      }, 800);
+    };
+
+    iframe.onload = triggerPrint;
+    setTimeout(triggerPrint, 250);
+  };
+
   const customerHistory = useMemo(() => {
     if (!historyCustomer) return [];
     return returns
@@ -652,6 +843,16 @@ export const Returns: React.FC = () => {
                           className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
                         >
                           <Eye size={16} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            printReturn(r);
+                          }}
+                          title="In phiếu trả hàng"
+                          className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                        >
+                          <Printer size={16} />
                         </button>
                         <button
                           onClick={(e) => {
@@ -1063,6 +1264,13 @@ export const Returns: React.FC = () => {
                 Xóa phiếu
               </button>
               <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => printReturn(detail)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-indigo-700 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition font-semibold"
+                >
+                  <Printer size={15} /> In phiếu
+                </button>
                 <button
                   type="button"
                   onClick={() => openEdit(detail)}
